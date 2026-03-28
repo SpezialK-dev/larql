@@ -1,4 +1,4 @@
-.PHONY: build release test check clean fmt lint docs
+.PHONY: build release test check clean fmt lint demos
 
 # Build
 build:
@@ -26,6 +26,16 @@ lint:
 clean:
 	cargo clean
 
+# Demos
+demos:
+	cargo run --release -p larql-core --example graph_demo
+	cargo run --release -p larql-core --example edge_demo
+	cargo run --release -p larql-core --example serialization_demo
+	cargo run --release -p larql-core --example algorithm_demo
+
+bench:
+	cargo run --release -p larql-core --example bench_graph
+
 # Python extension (requires virtualenv)
 python-build:
 	cd crates/larql-python && maturin develop --release
@@ -33,7 +43,7 @@ python-build:
 python-check:
 	cargo check -p larql-python
 
-# Extraction examples
+# Extraction
 extract-test:
 	cargo run --release -p larql-cli -- weight-extract google/gemma-3-4b-it \
 		--layer 26 -o output/test-L26.larql.json \
