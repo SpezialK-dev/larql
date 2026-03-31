@@ -1,11 +1,11 @@
-//! LQL Parser Demo — parse every statement type from the spec and display the AST.
+//! LQL Parser Demo — parse every statement type from the spec v0.3 and display the AST.
 //!
 //! Run: cargo run -p larql-lql --example parser_demo
 
 use larql_lql::parse;
 
 fn main() {
-    println!("=== LQL Parser Demo ===\n");
+    println!("=== LQL Parser Demo (spec v0.3) ===\n");
 
     // ── Lifecycle Statements ──
     section("Lifecycle");
@@ -16,8 +16,13 @@ fn main() {
     );
 
     demo(
+        "EXTRACT (with weights)",
+        r#"EXTRACT MODEL "google/gemma-3-4b-it" INTO "gemma3-4b.vindex" WITH ALL;"#,
+    );
+
+    demo(
         "EXTRACT (full)",
-        r#"EXTRACT MODEL "google/gemma-3-4b-it" INTO "gemma3-4b.vindex" COMPONENTS FFN_GATE, FFN_DOWN, FFN_UP, EMBEDDINGS LAYERS 0-33;"#,
+        r#"EXTRACT MODEL "google/gemma-3-4b-it" INTO "gemma3-4b.vindex" COMPONENTS FFN_GATE, FFN_DOWN, FFN_UP, EMBEDDINGS LAYERS 0-33 WITH ALL;"#,
     );
 
     demo(
@@ -36,115 +41,63 @@ fn main() {
     );
 
     demo(
-        "DIFF (with LIMIT)",
-        r#"DIFF "a.vindex" "b.vindex" LIMIT 20;"#,
+        "DIFF (with RELATION + LIMIT)",
+        r#"DIFF "a.vindex" "b.vindex" RELATION "capital" LIMIT 20;"#,
     );
 
-    demo(
-        "USE (vindex)",
-        r#"USE "gemma3-4b.vindex";"#,
-    );
-
-    demo(
-        "USE MODEL",
-        r#"USE MODEL "google/gemma-3-4b-it";"#,
-    );
-
-    demo(
-        "USE MODEL AUTO_EXTRACT",
-        r#"USE MODEL "google/gemma-3-4b-it" AUTO_EXTRACT;"#,
-    );
+    demo("USE (vindex)", r#"USE "gemma3-4b.vindex";"#);
+    demo("USE MODEL", r#"USE MODEL "google/gemma-3-4b-it";"#);
+    demo("USE MODEL AUTO_EXTRACT", r#"USE MODEL "google/gemma-3-4b-it" AUTO_EXTRACT;"#);
 
     // ── Query Statements ──
     section("Query");
 
-    demo(
-        "WALK (minimal)",
-        r#"WALK "The capital of France is";"#,
-    );
-
+    demo("WALK (minimal)", r#"WALK "The capital of France is";"#);
     demo(
         "WALK (full options)",
         r#"WALK "The capital of France is" TOP 5 LAYERS 25-33 MODE hybrid COMPARE;"#,
     );
 
-    demo(
-        "WALK (all modes)",
-        r#"WALK "test" MODE pure;"#,
-    );
-
-    demo(
-        "SELECT (star, no WHERE)",
-        "SELECT * FROM EDGES LIMIT 5;",
-    );
-
+    demo("SELECT (star)", "SELECT * FROM EDGES LIMIT 5;");
     demo(
         "SELECT (fields + WHERE + ORDER + LIMIT)",
         r#"SELECT entity, relation, target, confidence FROM EDGES WHERE entity = "France" ORDER BY confidence DESC LIMIT 10;"#,
     );
-
-    demo(
-        "SELECT (multiple conditions)",
-        r#"SELECT * FROM EDGES WHERE relation = "capital-of" AND confidence > 0.5;"#,
-    );
-
-    demo(
-        "SELECT (by layer + feature)",
-        "SELECT * FROM EDGES WHERE layer = 26 AND feature = 9515;",
-    );
-
     demo(
         "SELECT (NEAREST TO)",
         r#"SELECT entity, target, distance FROM EDGES NEAREST TO "Mozart" AT LAYER 26 LIMIT 20;"#,
     );
 
+    // ── DESCRIBE with layer bands ──
+    section("DESCRIBE (Layer Bands)");
+
+    demo("DESCRIBE (default = knowledge)", r#"DESCRIBE "France";"#);
+    demo("DESCRIBE SYNTAX (L0-13)", r#"DESCRIBE "def" SYNTAX;"#);
+    demo("DESCRIBE KNOWLEDGE (L14-27)", r#"DESCRIBE "France" KNOWLEDGE;"#);
+    demo("DESCRIBE OUTPUT (L28-33)", r#"DESCRIBE "France" OUTPUT;"#);
+    demo("DESCRIBE ALL LAYERS", r#"DESCRIBE "France" ALL LAYERS;"#);
+    demo("DESCRIBE AT LAYER", r#"DESCRIBE "Mozart" AT LAYER 26;"#);
+    demo("DESCRIBE RELATIONS ONLY", r#"DESCRIBE "France" RELATIONS ONLY;"#);
     demo(
-        "SELECT (LIKE)",
-        r#"SELECT * FROM EDGES WHERE entity LIKE "Fran%";"#,
+        "DESCRIBE band + RELATIONS ONLY",
+        r#"DESCRIBE "France" KNOWLEDGE RELATIONS ONLY;"#,
     );
 
-    demo(
-        "SELECT (IN list)",
-        r#"SELECT * FROM EDGES WHERE entity IN ("France", "Germany", "Japan");"#,
-    );
+    // ── EXPLAIN ──
+    section("Explain");
 
-    demo(
-        "DESCRIBE (minimal)",
-        r#"DESCRIBE "France";"#,
-    );
-
-    demo(
-        "DESCRIBE (AT LAYER)",
-        r#"DESCRIBE "Mozart" AT LAYER 26;"#,
-    );
-
-    demo(
-        "DESCRIBE (RELATIONS ONLY)",
-        r#"DESCRIBE "France" RELATIONS ONLY;"#,
-    );
-
-    demo(
-        "EXPLAIN WALK",
-        r#"EXPLAIN WALK "The capital of France is";"#,
-    );
-
+    demo("EXPLAIN WALK", r#"EXPLAIN WALK "The capital of France is";"#);
     demo(
         "EXPLAIN WALK (with options)",
-        r#"EXPLAIN WALK "prompt" LAYERS 24-33 VERBOSE;"#,
+        r#"EXPLAIN WALK "prompt" LAYERS 24-33 TOP 3 VERBOSE;"#,
     );
+    demo("EXPLAIN INFER", r#"EXPLAIN INFER "The capital of France is" TOP 5;"#);
 
     // ── Inference Statements ──
     section("Inference");
 
-    demo(
-        "INFER (minimal)",
-        r#"INFER "The capital of France is" TOP 5;"#,
-    );
-
-    demo(
-        "INFER (with compare)",
-        r#"INFER "The capital of France is" TOP 5 COMPARE;"#,
-    );
+    demo("INFER (minimal)", r#"INFER "The capital of France is" TOP 5;"#);
+    demo("INFER (with compare)", r#"INFER "The capital of France is" TOP 5 COMPARE;"#);
 
     // ── Mutation Statements ──
     section("Mutation");
@@ -153,38 +106,26 @@ fn main() {
         "INSERT (minimal)",
         r#"INSERT INTO EDGES (entity, relation, target) VALUES ("John Coyle", "lives-in", "Colchester");"#,
     );
-
     demo(
         "INSERT (with layer + confidence)",
         r#"INSERT INTO EDGES (entity, relation, target) VALUES ("John", "occupation", "engineer") AT LAYER 26 CONFIDENCE 0.8;"#,
     );
-
-    demo(
-        "DELETE (single condition)",
-        r#"DELETE FROM EDGES WHERE entity = "outdated";"#,
-    );
-
-    demo(
-        "DELETE (AND conditions)",
-        r#"DELETE FROM EDGES WHERE entity = "John Coyle" AND relation = "lives-in";"#,
-    );
-
+    demo("DELETE", r#"DELETE FROM EDGES WHERE entity = "John Coyle" AND relation = "lives-in";"#);
     demo(
         "UPDATE",
         r#"UPDATE EDGES SET target = "London" WHERE entity = "John Coyle" AND relation = "lives-in";"#,
     );
-
     demo(
-        "MERGE (minimal)",
-        r#"MERGE "medical-knowledge.vindex";"#,
+        "UPDATE (multiple SET)",
+        r#"UPDATE EDGES SET target = "London", confidence = 0.9 WHERE entity = "John Coyle";"#,
     );
-
+    demo("MERGE (minimal)", r#"MERGE "medical-knowledge.vindex";"#);
     demo(
         "MERGE (full)",
         r#"MERGE "medical-knowledge.vindex" INTO "gemma3-4b.vindex" ON CONFLICT HIGHEST_CONFIDENCE;"#,
     );
 
-    // ── Introspection Statements ──
+    // ── Introspection ──
     section("Introspection");
 
     demo("SHOW RELATIONS", "SHOW RELATIONS;");
@@ -192,14 +133,10 @@ fn main() {
     demo("SHOW RELATIONS AT LAYER", "SHOW RELATIONS AT LAYER 26;");
     demo("SHOW LAYERS", "SHOW LAYERS;");
     demo("SHOW LAYERS (range)", "SHOW LAYERS RANGE 0-10;");
+    demo("SHOW LAYERS (bare range)", "SHOW LAYERS 0-10;");
     demo("SHOW FEATURES", "SHOW FEATURES 26;");
-    demo(
-        "SHOW FEATURES (with filter)",
-        r#"SHOW FEATURES 26 WHERE relation = "capital-of" LIMIT 5;"#,
-    );
     demo("SHOW MODELS", "SHOW MODELS;");
     demo("STATS", "STATS;");
-    demo("STATS (with path)", r#"STATS "gemma3.vindex";"#);
 
     // ── Pipe Operator ──
     section("Pipe Operator");
@@ -209,40 +146,28 @@ fn main() {
         r#"WALK "The capital of France is" TOP 5 |> EXPLAIN WALK "The capital of France is";"#,
     );
 
-    // ── Comments ──
-    section("Comments");
-
-    demo(
-        "Leading comment",
-        "-- This is a comment\nSTATS;",
-    );
-
-    demo(
-        "Inline comment",
-        "STATS; -- trailing comment",
-    );
-
-    demo(
-        "Multi-line with comments",
-        "-- Act 1\nSHOW RELATIONS;\n-- Act 2",
-    );
-
-    // ── Demo Script (from spec) ──
-    section("Full Demo Script");
+    // ── Demo Script (spec v0.3) ──
+    section("Full Demo Script (spec v0.3)");
 
     let demo_stmts = vec![
-        r#"EXTRACT MODEL "google/gemma-3-4b-it" INTO "gemma3-4b.vindex";"#,
+        // ACT 1: DECOMPILE
+        r#"EXTRACT MODEL "google/gemma-3-4b-it" INTO "gemma3-4b.vindex" WITH ALL;"#,
         r#"USE "gemma3-4b.vindex";"#,
         "STATS;",
+        // ACT 2: INSPECT
         "SHOW RELATIONS WITH EXAMPLES;",
         r#"DESCRIBE "France";"#,
-        r#"SELECT entity, target, confidence FROM EDGES WHERE relation = "capital-of" ORDER BY confidence DESC LIMIT 10;"#,
+        r#"DESCRIBE "Einstein";"#,
+        r#"DESCRIBE "def" SYNTAX;"#,
+        // ACT 3: WALK + INFER
         r#"WALK "France" TOP 10;"#,
         r#"EXPLAIN WALK "The capital of France is";"#,
         r#"INFER "The capital of France is" TOP 5 COMPARE;"#,
-        r#"WALK "Where does John Coyle live?" TOP 5;"#,
+        // ACT 4: EDIT
+        r#"DESCRIBE "John Coyle";"#,
         r#"INSERT INTO EDGES (entity, relation, target) VALUES ("John Coyle", "lives-in", "Colchester");"#,
         r#"DESCRIBE "John Coyle";"#,
+        // ACT 5: RECOMPILE
         r#"DIFF "gemma3-4b.vindex" CURRENT;"#,
         r#"COMPILE CURRENT INTO MODEL "gemma3-4b-edited/" FORMAT safetensors;"#,
     ];

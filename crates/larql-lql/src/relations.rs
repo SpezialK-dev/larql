@@ -104,6 +104,11 @@ impl RelationClassifier {
         Some((label, count, tops))
     }
 
+    /// Check whether a feature's label is probe-confirmed (vs cluster-assigned).
+    pub fn is_probe_label(&self, layer: usize, feature: usize) -> bool {
+        self.probe_labels.contains_key(&(layer, feature))
+    }
+
     /// Number of probe-confirmed feature labels.
     pub fn num_probe_labels(&self) -> usize {
         self.probe_count

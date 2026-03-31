@@ -280,7 +280,8 @@ LQL Commands:
     WALK <prompt> [TOP n];               Feature scan for a token
     SELECT ... FROM EDGES WHERE ...;     Query edges
     DESCRIBE <entity>;                   Knowledge about an entity
-    EXPLAIN WALK <prompt>;               Feature trace per layer
+    EXPLAIN WALK <prompt>;               Feature trace (no attention)
+    EXPLAIN INFER <prompt>;              Feature trace (with attention)
 
   Inference (requires model weights):
     INFER <prompt> [TOP n] [COMPARE];    Full prediction with attention

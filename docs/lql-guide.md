@@ -146,7 +146,8 @@ COMPILE CURRENT INTO MODEL "gemma3-4b-edited/" FORMAT safetensors;
 | `WALK "token" TOP n` | Feature scan -- what gate features fire | Working |
 | `DESCRIBE "entity"` | Knowledge about an entity, grouped by layer band | Working |
 | `SELECT ... FROM EDGES WHERE ...` | Query edges by layer, feature, token | Working |
-| `EXPLAIN WALK "prompt"` | Per-layer feature trace | Working |
+| `EXPLAIN WALK "prompt"` | Feature trace (no attention) | Working |
+| `EXPLAIN INFER "prompt"` | Feature trace with attention | Working (needs weights) |
 
 ### Inference (requires model weights)
 

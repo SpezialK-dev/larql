@@ -11,6 +11,7 @@ pub enum Statement {
         output: String,
         components: Option<Vec<Component>>,
         layers: Option<Range>,
+        extract_level: ExtractLevel,
     },
     Compile {
         vindex: VindexRef,
@@ -51,13 +52,17 @@ pub enum Statement {
     },
     Describe {
         entity: String,
+        band: Option<LayerBand>,
         layer: Option<u32>,
         relations_only: bool,
+        verbose: bool,
     },
     Explain {
         prompt: String,
+        mode: ExplainMode,
         layers: Option<Range>,
         verbose: bool,
+        top: Option<u32>,
     },
 
     // ── Mutation ──
@@ -116,6 +121,36 @@ pub enum VindexRef {
 pub enum UseTarget {
     Vindex(String),
     Model { id: String, auto_extract: bool },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExplainMode {
+    /// EXPLAIN WALK — pure vindex gate KNN, no attention
+    Walk,
+    /// EXPLAIN INFER — full inference with feature trace
+    Infer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerBand {
+    /// L0-13: morphological, syntactic, code structure
+    Syntax,
+    /// L14-27: semantic/factual features (default for DESCRIBE)
+    Knowledge,
+    /// L28-33: formatting/output features
+    Output,
+    /// All layers: syntax + knowledge + output
+    All,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtractLevel {
+    /// Default: gate + embed + down_meta (~3 GB f16)
+    Browse,
+    /// + attention weights (~6 GB f16), enables INFER
+    Inference,
+    /// + up, norms, lm_head (~10 GB f16), enables COMPILE
+    All,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

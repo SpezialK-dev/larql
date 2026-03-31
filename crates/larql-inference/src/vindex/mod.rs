@@ -17,6 +17,7 @@ mod build_from_vectors;
 pub mod config;
 pub mod index;
 mod load;
+mod mutate;
 mod walk_ffn;
 mod weights;
 

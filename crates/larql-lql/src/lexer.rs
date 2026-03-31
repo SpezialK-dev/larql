@@ -71,6 +71,7 @@ pub enum Keyword {
     Confidence,
     Model,
     Edges,
+    Relation,
     Relations,
     Features,
     Models,
@@ -105,6 +106,12 @@ pub enum Keyword {
     AttnOv,
     AttnQk,
     Infer,
+    Without,
+    Syntax,
+    Knowledge,
+    Output,
+    Weights,
+    Inference,
 }
 
 impl Keyword {
@@ -147,6 +154,7 @@ impl Keyword {
             "CONFIDENCE" => Some(Self::Confidence),
             "MODEL" => Some(Self::Model),
             "EDGES" => Some(Self::Edges),
+            "RELATION" => Some(Self::Relation),
             "RELATIONS" => Some(Self::Relations),
             "FEATURES" => Some(Self::Features),
             "MODELS" => Some(Self::Models),
@@ -181,6 +189,12 @@ impl Keyword {
             "ATTN_OV" => Some(Self::AttnOv),
             "ATTN_QK" => Some(Self::AttnQk),
             "INFER" => Some(Self::Infer),
+            "WITHOUT" => Some(Self::Without),
+            "SYNTAX" => Some(Self::Syntax),
+            "KNOWLEDGE" => Some(Self::Knowledge),
+            "OUTPUT" => Some(Self::Output),
+            "WEIGHTS" => Some(Self::Weights),
+            "INFERENCE" => Some(Self::Inference),
             _ => None,
         }
     }
@@ -421,7 +435,7 @@ mod tests {
         assert!(matches!(tokens[0], Token::Keyword(Keyword::Select)));
         assert!(matches!(tokens[1], Token::Ident(ref s) if s == "entity"));
         assert!(matches!(tokens[2], Token::Comma));
-        assert!(matches!(tokens[3], Token::Ident(ref s) if s == "relation"));
+        assert!(matches!(tokens[3], Token::Keyword(Keyword::Relation)));
     }
 
     // ── Comments ──

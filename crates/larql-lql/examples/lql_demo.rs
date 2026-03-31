@@ -8,7 +8,7 @@
 use larql_lql::{parse, run_batch, Session};
 
 fn main() {
-    println!("=== LQL End-to-End Demo ===\n");
+    println!("=== LQL End-to-End Demo (spec v0.3) ===\n");
 
     // ── Session lifecycle ──
     section("Session Lifecycle");
@@ -49,25 +49,13 @@ fn main() {
         "USE MODEL AUTO_EXTRACT",
     );
 
-    // ── Stub operations ──
-    section("Stub Operations (Not Yet Implemented)");
-
-    demonstrate(
-        &mut session,
-        r#"EXTRACT MODEL "google/gemma-3-4b-it" INTO "out.vindex";"#,
-        "EXTRACT",
-    );
+    // ── Operations requiring backend ──
+    section("Operations Without Backend");
 
     demonstrate(
         &mut session,
         r#"COMPILE CURRENT INTO MODEL "out/" FORMAT safetensors;"#,
-        "COMPILE",
-    );
-
-    demonstrate(
-        &mut session,
-        r#"DIFF "a.vindex" "b.vindex";"#,
-        "DIFF",
+        "COMPILE (requires backend)",
     );
 
     demonstrate(
@@ -79,19 +67,13 @@ fn main() {
     demonstrate(
         &mut session,
         r#"DELETE FROM EDGES WHERE entity = "x";"#,
-        "DELETE",
+        "DELETE (requires backend)",
     );
 
     demonstrate(
         &mut session,
         r#"UPDATE EDGES SET target = "y" WHERE entity = "x";"#,
-        "UPDATE",
-    );
-
-    demonstrate(
-        &mut session,
-        r#"MERGE "source.vindex";"#,
-        "MERGE",
+        "UPDATE (requires backend)",
     );
 
     // ── Batch execution ──
@@ -102,7 +84,7 @@ fn main() {
 SHOW MODELS;
 -- This should produce an error (no backend)
 STATS;
--- Parse error
+-- Another that works
 SHOW MODELS;
 "#;
 
@@ -144,80 +126,48 @@ SHOW MODELS;
         }
     }
 
-    // ── Round-trip: every spec statement parses ──
-    section("Spec Compliance: All Statement Types");
+    // ── Spec compliance: all statement types ──
+    section("Spec Compliance: All Statement Types (v0.3)");
 
     let all_statements = vec![
         // Lifecycle
-        (
-            "EXTRACT",
-            r#"EXTRACT MODEL "m" INTO "o" COMPONENTS FFN_GATE, FFN_DOWN LAYERS 0-33;"#,
-        ),
-        (
-            "COMPILE",
-            r#"COMPILE CURRENT INTO MODEL "out/" FORMAT safetensors;"#,
-        ),
+        ("EXTRACT", r#"EXTRACT MODEL "m" INTO "o" COMPONENTS FFN_GATE, FFN_DOWN LAYERS 0-33;"#),
+        ("EXTRACT (inference)", r#"EXTRACT MODEL "m" INTO "o" WITH INFERENCE;"#),
+        ("EXTRACT (all)", r#"EXTRACT MODEL "m" INTO "o" WITH ALL;"#),
+        ("COMPILE", r#"COMPILE CURRENT INTO MODEL "out/" FORMAT safetensors;"#),
         ("DIFF", r#"DIFF "a.vindex" CURRENT;"#),
+        ("DIFF (relation)", r#"DIFF "a.vindex" "b.vindex" RELATION "capital" LIMIT 20;"#),
         ("USE (vindex)", r#"USE "path.vindex";"#),
-        (
-            "USE MODEL",
-            r#"USE MODEL "google/gemma-3-4b-it" AUTO_EXTRACT;"#,
-        ),
+        ("USE MODEL", r#"USE MODEL "google/gemma-3-4b-it" AUTO_EXTRACT;"#),
         // Query
-        (
-            "WALK",
-            r#"WALK "prompt" TOP 5 LAYERS 25-33 MODE hybrid COMPARE;"#,
-        ),
-        (
-            "SELECT",
-            r#"SELECT entity, target FROM EDGES WHERE relation = "capital-of" ORDER BY confidence DESC LIMIT 10;"#,
-        ),
-        (
-            "SELECT NEAREST",
-            r#"SELECT * FROM EDGES NEAREST TO "Mozart" AT LAYER 26 LIMIT 20;"#,
-        ),
-        (
-            "DESCRIBE",
-            r#"DESCRIBE "France" AT LAYER 26 RELATIONS ONLY;"#,
-        ),
-        (
-            "EXPLAIN",
-            r#"EXPLAIN WALK "prompt" LAYERS 24-33 VERBOSE;"#,
-        ),
+        ("WALK", r#"WALK "prompt" TOP 5 LAYERS 25-33 MODE hybrid COMPARE;"#),
+        ("SELECT", r#"SELECT entity, target FROM EDGES WHERE relation = "capital" ORDER BY confidence DESC LIMIT 10;"#),
+        ("SELECT NEAREST", r#"SELECT * FROM EDGES NEAREST TO "Mozart" AT LAYER 26 LIMIT 20;"#),
+        // DESCRIBE bands
+        ("DESCRIBE", r#"DESCRIBE "France";"#),
+        ("DESCRIBE SYNTAX", r#"DESCRIBE "def" SYNTAX;"#),
+        ("DESCRIBE KNOWLEDGE", r#"DESCRIBE "France" KNOWLEDGE;"#),
+        ("DESCRIBE OUTPUT", r#"DESCRIBE "France" OUTPUT;"#),
+        ("DESCRIBE ALL", r#"DESCRIBE "France" ALL LAYERS;"#),
+        ("DESCRIBE AT LAYER", r#"DESCRIBE "France" AT LAYER 26 RELATIONS ONLY;"#),
+        // EXPLAIN
+        ("EXPLAIN WALK", r#"EXPLAIN WALK "prompt" LAYERS 24-33 VERBOSE;"#),
+        ("EXPLAIN INFER", r#"EXPLAIN INFER "prompt" TOP 5;"#),
+        // Inference
+        ("INFER", r#"INFER "prompt" TOP 5 COMPARE;"#),
         // Mutation
-        (
-            "INSERT",
-            r#"INSERT INTO EDGES (entity, relation, target) VALUES ("a", "b", "c") AT LAYER 26 CONFIDENCE 0.8;"#,
-        ),
-        (
-            "DELETE",
-            r#"DELETE FROM EDGES WHERE entity = "x" AND layer = 26;"#,
-        ),
-        (
-            "UPDATE",
-            r#"UPDATE EDGES SET target = "y" WHERE entity = "x";"#,
-        ),
-        (
-            "MERGE",
-            r#"MERGE "src.vindex" INTO "dst.vindex" ON CONFLICT HIGHEST_CONFIDENCE;"#,
-        ),
+        ("INSERT", r#"INSERT INTO EDGES (entity, relation, target) VALUES ("a", "b", "c") AT LAYER 26 CONFIDENCE 0.8;"#),
+        ("DELETE", r#"DELETE FROM EDGES WHERE entity = "x" AND layer = 26;"#),
+        ("UPDATE", r#"UPDATE EDGES SET target = "y", confidence = 0.9 WHERE entity = "x";"#),
+        ("MERGE", r#"MERGE "src.vindex" INTO "dst.vindex" ON CONFLICT HIGHEST_CONFIDENCE;"#),
         // Introspection
-        (
-            "SHOW RELATIONS",
-            "SHOW RELATIONS AT LAYER 26 WITH EXAMPLES;",
-        ),
+        ("SHOW RELATIONS", "SHOW RELATIONS AT LAYER 26 WITH EXAMPLES;"),
         ("SHOW LAYERS", "SHOW LAYERS RANGE 0-10;"),
-        (
-            "SHOW FEATURES",
-            r#"SHOW FEATURES 26 WHERE relation = "capital-of" LIMIT 5;"#,
-        ),
+        ("SHOW FEATURES", r#"SHOW FEATURES 26 WHERE relation = "capital" LIMIT 5;"#),
         ("SHOW MODELS", "SHOW MODELS;"),
         ("STATS", r#"STATS "path.vindex";"#),
         // Pipe
-        (
-            "PIPE",
-            r#"WALK "test" TOP 5 |> EXPLAIN WALK "test";"#,
-        ),
+        ("PIPE", r#"WALK "test" TOP 5 |> EXPLAIN WALK "test";"#),
     ];
 
     let mut ok = 0;
