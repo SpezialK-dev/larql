@@ -994,9 +994,13 @@ impl VectorIndex {
         feature_set.into_iter().collect()
     }
 
-    /// Pre-decode all gate vectors to f32 for lock-free access.
-    /// Call once after loading. Subsequent gate_knn calls bypass the mutex.
+    /// Pre-decode f16 gate vectors to f32 for lock-free access.
+    /// For f32 vindexes this is a no-op — the mmap path is already zero-copy.
+    /// Call once after loading for f16 vindexes.
     pub fn warmup(&self) {
+        // f32 mmap is already zero-copy — no warmup needed
+        if self.gate_mmap_dtype == crate::config::dtype::StorageDtype::F32 { return; }
+
         let Some(ref mmap) = self.gate_mmap_bytes else { return; };
         let mut warmed = self.warmed_gates.write().unwrap();
         if warmed.len() < self.num_layers {
@@ -1011,20 +1015,8 @@ impl VectorIndex {
                 let byte_count = slice.num_features * self.hidden_size * bpf;
                 let byte_end = byte_offset + byte_count;
                 if byte_end > mmap.len() { continue; }
-                match self.gate_mmap_dtype {
-                    crate::config::dtype::StorageDtype::F16 => {
-                        let raw = &mmap[byte_offset..byte_end];
-                        warmed[layer] = Some(larql_models::quant::half::decode_f16(raw));
-                    }
-                    crate::config::dtype::StorageDtype::F32 => {
-                        let float_count = slice.num_features * self.hidden_size;
-                        let data = unsafe {
-                            let ptr = mmap[byte_offset..byte_end].as_ptr() as *const f32;
-                            std::slice::from_raw_parts(ptr, float_count).to_vec()
-                        };
-                        warmed[layer] = Some(data);
-                    }
-                }
+                let raw = &mmap[byte_offset..byte_end];
+                warmed[layer] = Some(larql_models::quant::half::decode_f16(raw));
             }
         }
     }

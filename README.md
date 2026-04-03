@@ -257,7 +257,7 @@ Dense and full-precision MoE models support all operations (DESCRIBE, WALK, INFE
 | FFN gate+down projection | ~2.5 ms each |
 | Final logits (BLAS gemv, 262K vocab) | ~27 ms |
 
-Hardware acceleration: Apple Accelerate (AMX) for CPU matmuls, optional Metal GPU (`--features metal`) with auto-calibrated dispatch and buffer cache. See [docs/inference-engine.md](docs/inference-engine.md).
+Hardware acceleration: Apple Accelerate (AMX) for CPU matmuls, optional Metal GPU (`--features metal`) with auto-calibrated dispatch and buffer cache. FFN graph layer replaces dense matmul with vindex gate KNN at all 34 layers — 22% overhead, zero approximation. See [docs/inference-engine.md](docs/inference-engine.md) and [docs/ffn-graph-layer.md](docs/ffn-graph-layer.md).
 
 ## Residual Stream Trace
 
@@ -325,7 +325,8 @@ See [docs/residual-trace.md](docs/residual-trace.md) for the full writeup.
 | [docs/lql-guide.md](docs/lql-guide.md) | LQL quick start guide |
 | [docs/cli.md](docs/cli.md) | CLI reference |
 | [docs/inference-engine.md](docs/inference-engine.md) | Inference engine — BLAS-fused attention, Metal GPU, auto-calibration |
-| [docs/walk-boundary-sweep.md](docs/walk-boundary-sweep.md) | Walk boundary sweep — vindex FFN replaces dense FFN at all 34 layers |
+| [docs/ffn-graph-layer.md](docs/ffn-graph-layer.md) | FFN graph layer — vindex replaces dense FFN at all 34 layers, 22% gap |
+| [docs/walk-boundary-sweep.md](docs/walk-boundary-sweep.md) | Walk boundary sweep — correctness proof across all layer boundaries |
 | [docs/knowledge-pipeline.md](docs/knowledge-pipeline.md) | Knowledge labelling pipeline |
 | [docs/residual-trace.md](docs/residual-trace.md) | Residual stream trace — decomposition, storage, tiered context |
 | [docs/trace-format-spec.md](docs/trace-format-spec.md) | Trace file format specification (.bin, .bndx, .ctxt) |

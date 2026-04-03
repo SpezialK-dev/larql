@@ -47,10 +47,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let index = VectorIndex::load_vindex(&vindex_path, &mut cb)?;
     println!("Vindex loaded in {:.1}s ({} vectors)", t0.elapsed().as_secs_f64(), index.total_gate_vectors());
 
-    // Pre-decode all gate vectors for lock-free access
+    // Pre-decode f16 gate vectors (skip for f32 — already zero-copy mmap)
     let t0 = Instant::now();
     index.warmup();
-    println!("Gate warmup in {:.1}s (f16→f32 pre-decode)", t0.elapsed().as_secs_f64());
+    let warmup_s = t0.elapsed().as_secs_f64();
+    if warmup_s > 0.01 {
+        println!("Gate warmup in {warmup_s:.1}s (f16→f32 pre-decode)");
+    } else {
+        println!("Gate warmup: skipped (f32, zero-copy mmap)");
+    }
 
     let weights = model.weights();
     let tokenizer = model.tokenizer();
