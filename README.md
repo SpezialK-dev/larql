@@ -87,7 +87,7 @@ larql-models      Model config, architecture traits, weight loading, quant/dequa
 larql-vindex      Vindex lifecycle: extract, load, query, mutate, patch, save
     ↓
 larql-core        Graph algorithms, merge, diff
-larql-inference   Forward pass, attention, WalkFfn (uses vindex KNN)
+larql-inference   Forward pass, BLAS-fused attention, Metal GPU, WalkFfn
     ↓
 larql-lql         LQL parser, executor, REPL, USE REMOTE client
     ↓
@@ -137,8 +137,9 @@ EXTRACT MODEL "google/gemma-3-4b-it" INTO "gemma3-4b.vindex" WITH ALL;
 
 -- Browse knowledge (no GPU needed)
 USE "gemma3-4b.vindex";
-DESCRIBE "France";
-DESCRIBE "Einstein" ALL LAYERS VERBOSE;
+DESCRIBE "France";                      -- verbose by default: [relation] labels, also-tokens
+DESCRIBE "Einstein" ALL LAYERS;
+DESCRIBE "France" BRIEF;                -- compact view
 WALK "The capital of France is" TOP 10;
 
 -- Run inference (needs model weights in vindex)
@@ -241,13 +242,22 @@ Dense and full-precision MoE models support all operations (DESCRIBE, WALK, INFE
 | Load vindex | 8ms |
 | Mutate (meta + gate) | 617ns |
 
-### Inference (Gemma 3 4B, Apple Silicon)
+### Inference Engine (Gemma 3 4B, Apple Silicon)
 
 | Operation | Latency |
 |---|---|
 | Walk prediction (no attention) | 33ms |
 | INFER prediction (with attention) | ~11s |
 | DESCRIBE (knowledge browse) | 33ms |
+
+| Component | Latency |
+|---|---|
+| BLAS-fused attention (seq=6, hd=256, 10 heads) | 42 us |
+| Q/K/V/O projection (Accelerate AMX) | ~1 ms each |
+| FFN gate+down projection | ~2.5 ms each |
+| Final logits (BLAS gemv, 262K vocab) | ~27 ms |
+
+Hardware acceleration: Apple Accelerate (AMX) for CPU matmuls, optional Metal GPU (`--features metal`) with auto-calibrated dispatch and buffer cache. See [docs/inference-engine.md](docs/inference-engine.md).
 
 ## Residual Stream Trace
 
@@ -314,6 +324,8 @@ See [docs/residual-trace.md](docs/residual-trace.md) for the full writeup.
 | [docs/vindex-ecosystem-spec.md](docs/vindex-ecosystem-spec.md) | Distributed hosting, HuggingFace, Vindexfile (~85% implemented) |
 | [docs/lql-guide.md](docs/lql-guide.md) | LQL quick start guide |
 | [docs/cli.md](docs/cli.md) | CLI reference |
+| [docs/inference-engine.md](docs/inference-engine.md) | Inference engine — BLAS-fused attention, Metal GPU, auto-calibration |
+| [docs/walk-boundary-sweep.md](docs/walk-boundary-sweep.md) | Walk boundary sweep — vindex FFN replaces dense FFN at all 34 layers |
 | [docs/knowledge-pipeline.md](docs/knowledge-pipeline.md) | Knowledge labelling pipeline |
 | [docs/residual-trace.md](docs/residual-trace.md) | Residual stream trace — decomposition, storage, tiered context |
 | [docs/trace-format-spec.md](docs/trace-format-spec.md) | Trace file format specification (.bin, .bndx, .ctxt) |
@@ -321,8 +333,20 @@ See [docs/residual-trace.md](docs/residual-trace.md) for the full writeup.
 ## Building & Testing
 
 ```bash
-cargo build --release       # optimized build
-cargo test                  # 124+ vindex tests, 545+ across all crates
+cargo build --release                    # optimised build
+cargo build --release --features metal   # with Metal GPU backend
+cargo test                               # all tests across all crates
+cargo test -p larql-inference            # inference engine tests (109 tests)
+cargo test -p larql-inference --features metal  # + Metal GPU tests (115 tests)
+
+# Inference engine examples
+cargo run --release -p larql-inference --example attention_demo    # fused attention demo
+cargo run --release -p larql-inference --example bench_attention   # attention benchmarks
+cargo run --release -p larql-inference --example backend_demo --features metal   # backend demo
+cargo run --release -p larql-inference --example bench_backend --features metal  # backend benchmarks
+cargo run --release -p larql-inference --example bench_inference   # full inference benchmarks
+
+# Vindex and LQL examples
 cargo run -p larql-vindex --example vindex_demo    # vindex feature demo
 cargo run -p larql-vindex --example vindex_bench --release  # benchmarks
 cargo run -p larql-lql --example parser_demo       # parser demo

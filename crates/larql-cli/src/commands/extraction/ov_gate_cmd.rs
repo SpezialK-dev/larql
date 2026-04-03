@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::Args;
-use larql_inference::ndarray::{self, Array2};
+use larql_inference::ndarray;
 use larql_inference::tokenizers;
 use larql_vindex::load_feature_labels;
 use larql_inference::InferenceModel;

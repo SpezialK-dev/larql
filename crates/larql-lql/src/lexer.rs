@@ -123,6 +123,8 @@ pub enum Keyword {
     Answer,
     Decompose,
     Positions,
+    Brief,
+    Raw,
 }
 
 impl Keyword {
@@ -217,6 +219,8 @@ impl Keyword {
             "ANSWER" => Some(Self::Answer),
             "DECOMPOSE" => Some(Self::Decompose),
             "POSITIONS" => Some(Self::Positions),
+            "BRIEF" => Some(Self::Brief),
+            "RAW" => Some(Self::Raw),
             _ => None,
         }
     }

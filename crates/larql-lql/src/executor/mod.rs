@@ -108,8 +108,8 @@ impl Session {
             Statement::Walk { prompt, top, layers, mode, compare } => {
                 self.exec_walk(prompt, *top, layers.as_ref(), *mode, *compare)
             }
-            Statement::Describe { entity, band, layer, relations_only, verbose } => {
-                self.exec_describe(entity, *band, *layer, *relations_only, *verbose)
+            Statement::Describe { entity, band, layer, relations_only, mode } => {
+                self.exec_describe(entity, *band, *layer, *relations_only, *mode)
             }
             Statement::Select { fields, conditions, nearest, order, limit } => {
                 self.exec_select(fields, conditions, nearest.as_ref(), order.as_ref(), *limit)
@@ -175,8 +175,8 @@ impl Session {
     fn execute_remote(&mut self, stmt: &Statement) -> Result<Vec<String>, LqlError> {
         match stmt {
             Statement::Use { target } => self.exec_use(target),
-            Statement::Describe { entity, band, verbose, .. } => {
-                self.remote_describe(entity, *band, *verbose)
+            Statement::Describe { entity, band, mode, .. } => {
+                self.remote_describe(entity, *band, *mode == crate::ast::DescribeMode::Verbose)
             }
             Statement::Walk { prompt, top, layers, .. } => {
                 self.remote_walk(prompt, *top, layers.as_ref())

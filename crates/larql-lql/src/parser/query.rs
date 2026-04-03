@@ -122,7 +122,7 @@ impl Parser {
         let mut band = None;
         let mut layer = None;
         let mut relations_only = false;
-        let mut verbose = false;
+        let mut mode = DescribeMode::default(); // Verbose
 
         loop {
             match self.peek() {
@@ -155,14 +155,22 @@ impl Parser {
                 }
                 Token::Keyword(Keyword::Verbose) => {
                     self.advance();
-                    verbose = true;
+                    mode = DescribeMode::Verbose;
+                }
+                Token::Keyword(Keyword::Brief) => {
+                    self.advance();
+                    mode = DescribeMode::Brief;
+                }
+                Token::Keyword(Keyword::Raw) => {
+                    self.advance();
+                    mode = DescribeMode::Raw;
                 }
                 _ => break,
             }
         }
 
         self.eat_semicolon();
-        Ok(Statement::Describe { entity, band, layer, relations_only, verbose })
+        Ok(Statement::Describe { entity, band, layer, relations_only, mode })
     }
 
     pub(crate) fn parse_explain(&mut self) -> Result<Statement, ParseError> {

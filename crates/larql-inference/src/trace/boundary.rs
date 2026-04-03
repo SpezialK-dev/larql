@@ -19,7 +19,7 @@
 //! Mmap'd for zero-copy reads. RSS ≈ one boundary at a time.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write, Seek, SeekFrom};
+use std::io::{self, Write, Seek, SeekFrom};
 use std::path::Path;
 
 use memmap2::Mmap;
@@ -51,10 +51,12 @@ impl BoundaryHeader {
         HEADER_SIZE
     }
 
+    #[allow(dead_code)]
     fn index_size(&self) -> usize {
         self.n_boundaries as usize * ENTRY_SIZE
     }
 
+    #[allow(dead_code)]
     fn data_offset(&self, max_boundaries: usize) -> usize {
         // Reserve index space for up to max_boundaries entries
         HEADER_SIZE + max_boundaries * ENTRY_SIZE

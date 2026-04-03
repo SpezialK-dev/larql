@@ -1,7 +1,7 @@
 //! Model weight tensors — the loaded representation of a model's parameters.
 
 use std::collections::HashMap;
-use ndarray::{Array2, ArcArray2};
+use ndarray::ArcArray2;
 use crate::ModelArchitecture;
 
 /// Type alias for weight tensors — ArcArray2 supports both owned and shared storage.

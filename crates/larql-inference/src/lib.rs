@@ -1,6 +1,7 @@
 extern crate blas_src;
 
 pub mod attention;
+pub mod backend;
 pub mod capture;
 pub mod error;
 pub mod ffn;
@@ -21,6 +22,12 @@ pub use ndarray;
 pub use safetensors;
 pub use tokenizers;
 
+// Backend re-exports.
+pub use backend::{MatMulBackend, MatMulOp, default_backend};
+pub use backend::cpu::CpuBackend;
+#[cfg(feature = "metal")]
+pub use backend::metal::MetalBackend;
+
 // Re-export essentials at crate root.
 pub use capture::{
     CaptureCallbacks, CaptureConfig, InferenceModel, TopKEntry, VectorFileHeader, VectorRecord,
@@ -30,9 +37,10 @@ pub use ffn::{FfnBackend, HighwayFfn, LayerFfnRouter, SparseFfn, WeightFfn};
 pub use attention::AttentionWeights;
 pub use forward::{
     calibrate_scalar_gains, capture_residuals, forward_to_layer, predict, predict_from_hidden,
-    predict_from_hidden_with_ffn, predict_with_ffn, predict_with_router, predict_with_strategy,
+    predict_from_hidden_with_ffn, predict_with_ffn, predict_with_ffn_trace,
+    predict_with_router, predict_with_strategy,
     trace_forward, trace_forward_full, trace_forward_with_ffn, LayerAttentionCapture, LayerMode,
-    PredictResult, TraceResult,
+    PredictResult, PredictResultWithResiduals, TraceResult,
 };
 pub use graph_ffn::{GateIndex, IndexBuildCallbacks, SilentIndexCallbacks};
 pub use ffn::experimental::cached::CachedFfn;

@@ -67,6 +67,16 @@ pub fn gqa_attention(
 
 /// GQA attention that optionally captures per-head attention weights for the last token.
 /// `softcap`: if Some(cap), apply tanh(scores/cap)*cap before softmax (Gemma2).
+///
+/// BLAS-fused attention: uses `gemv` (matrix-vector multiply via Accelerate/AMX)
+/// for the Q·K dot products and softmax·V accumulation, but never allocates the
+/// full [seq, seq] attention matrix. Per query position `qi`:
+///   1. `scores = K[0..=qi] @ Q[qi]` — one BLAS gemv
+///   2. scale + softcap + two-pass softmax on the scores vector
+///   3. `output = V[0..=qi]^T @ softmax_scores` — one BLAS gemv
+///
+/// Memory: O(seq) temporary per position, vs O(seq²) for the materialized path.
+/// At seq=6 this is negligible; at seq=512+ the savings are significant.
 #[allow(clippy::too_many_arguments)]
 pub fn gqa_attention_with_weights(
     q: &Array2<f32>,
@@ -87,56 +97,67 @@ pub fn gqa_attention_with_weights(
         Vec::new()
     };
 
+    let scale_f32 = scale as f32;
     let last_pos = seq_len - 1;
+
+    // Reusable buffer for softmax scores (avoids per-position allocation)
+    let mut scores_buf = vec![0.0f32; seq_len];
 
     for h in 0..num_q {
         let kv_h = h / reps;
         let q_off = h * head_dim;
         let kv_off = kv_h * head_dim;
 
-        // Q @ K^T with f64 accumulation for precision, then cast back to f32
-        let q_head = q.slice(ndarray::s![.., q_off..q_off + head_dim]);
-        let k_head = k.slice(ndarray::s![.., kv_off..kv_off + head_dim]);
-        let q_f64 = q_head.mapv(|v| v as f64);
-        let k_f64 = k_head.mapv(|v| v as f64);
-        let mut scores = q_f64.dot(&k_f64.t()).mapv(|v| (v * scale) as f32);
+        for qi in 0..seq_len {
+            let causal_len = qi + 1; // positions 0..=qi
 
-        // Softcapping: tanh(scores / cap) * cap (Gemma2)
-        if let Some(cap) = softcap {
-            scores.mapv_inplace(|v| (v / cap).tanh() * cap);
-        }
+            // ── BLAS gemv: compute all causal scores at once ──
+            // scores[0..=qi] = K[0..=qi, kv_off..kv_off+hd] @ Q[qi, q_off..q_off+hd]
+            let q_row = q.slice(ndarray::s![qi, q_off..q_off + head_dim]);
+            let k_block = k.slice(ndarray::s![0..causal_len, kv_off..kv_off + head_dim]);
+            let raw_scores = k_block.dot(&q_row); // [causal_len] via BLAS gemv
 
-        // Causal mask + softmax (f64 accumulation for precision)
-        for i in 0..seq_len {
-            for j in (i + 1)..seq_len {
-                scores[[i, j]] = -1e9;
+            // ── Scale + softcap ──
+            for i in 0..causal_len {
+                let mut s = raw_scores[i] * scale_f32;
+                if let Some(cap) = softcap {
+                    s = (s / cap).tanh() * cap;
+                }
+                scores_buf[i] = s;
             }
-            let max_val = scores.row(i).iter().copied().fold(f32::NEG_INFINITY, f32::max);
+
+            // ── Two-pass softmax with f64 accumulation ──
+            let max_val = scores_buf[..causal_len]
+                .iter()
+                .copied()
+                .fold(f32::NEG_INFINITY, f32::max);
             let mut sum = 0.0f64;
-            for j in 0..seq_len {
-                let v = ((scores[[i, j]] - max_val) as f64).exp();
-                scores[[i, j]] = v as f32;
-                sum += v;
+            for i in 0..causal_len {
+                let e = ((scores_buf[i] - max_val) as f64).exp();
+                scores_buf[i] = e as f32;
+                sum += e;
             }
             let inv_sum = (1.0 / sum) as f32;
-            for j in 0..seq_len {
-                scores[[i, j]] *= inv_sum;
+            for i in 0..causal_len {
+                scores_buf[i] *= inv_sum;
             }
-        }
 
-        // Capture last-token attention weights
-        if capture {
-            captured_heads.push(scores.row(last_pos).to_vec());
-        }
+            // ── Capture last-token attention weights ──
+            if capture && qi == last_pos {
+                let mut captured = vec![0.0f32; seq_len];
+                captured[..causal_len].copy_from_slice(&scores_buf[..causal_len]);
+                captured_heads.push(captured);
+            }
 
-        // Weighted sum: scores @ V_head via BLAS
-        let v_head = v.slice(ndarray::s![.., kv_off..kv_off + head_dim]);
-        let attn_v = scores.dot(&v_head);
+            // ── BLAS gemv: weighted V accumulation ──
+            // output[qi] = V[0..=qi, kv_off..kv_off+hd]^T @ softmax_scores[0..=qi]
+            let v_block = v.slice(ndarray::s![0..causal_len, kv_off..kv_off + head_dim]);
+            let scores_view = ndarray::ArrayView1::from(&scores_buf[..causal_len]);
+            let weighted_v = v_block.t().dot(&scores_view); // [head_dim] via BLAS gemv
 
-        // Write back to output
-        for i in 0..seq_len {
+            // Write output
             for d in 0..head_dim {
-                out[[i, q_off + d]] = attn_v[[i, d]];
+                out[[qi, q_off + d]] = weighted_v[d];
             }
         }
     }

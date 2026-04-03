@@ -547,4 +547,8 @@ impl GateIndex for PatchedVindex {
     fn num_features(&self, layer: usize) -> usize {
         self.num_features(layer)
     }
+
+    fn down_override(&self, layer: usize, feature: usize) -> Option<&[f32]> {
+        self.base.down_override(layer, feature)
+    }
 }

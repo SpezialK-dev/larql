@@ -51,13 +51,17 @@ STATS;
 
 ```sql
 -- What does the model know about France?
+-- Verbose by default: relation labels, also-tokens, layer ranges
 DESCRIBE "France";
+
+-- Compact view: top edges, primary layer only
+DESCRIBE "France" BRIEF;
+
+-- No labels — pure model signal
+DESCRIBE "France" RAW;
 
 -- Show all layer bands (syntax + knowledge + output)
 DESCRIBE "France" ALL LAYERS;
-
--- Verbose mode: raw cluster labels, layer ranges, also-tokens
-DESCRIBE "France" VERBOSE;
 
 -- Single layer
 DESCRIBE "Mozart" AT LAYER 26;
@@ -206,7 +210,9 @@ DESCRIBE groups features into three bands based on the model's layer structure:
 | Output | L28-33 | L26-31 | Formatting, token selection |
 
 ```sql
-DESCRIBE "France";              -- Knowledge band (default)
+DESCRIBE "France";              -- Verbose: relation labels, also-tokens, layer ranges (default)
+DESCRIBE "France" BRIEF;        -- Compact: top edges, primary layer only
+DESCRIBE "France" RAW;          -- No labels, pure model signal
 DESCRIBE "France" SYNTAX;       -- Syntax band only
 DESCRIBE "France" OUTPUT;       -- Output band only
 DESCRIBE "France" ALL LAYERS;   -- All three bands

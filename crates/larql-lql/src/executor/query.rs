@@ -259,8 +259,9 @@ impl Session {
         band: Option<crate::ast::LayerBand>,
         layer: Option<u32>,
         relations_only: bool,
-        verbose: bool,
+        mode: crate::ast::DescribeMode,
     ) -> Result<Vec<String>, LqlError> {
+        let verbose = mode != crate::ast::DescribeMode::Brief;
         // MoE router-based DESCRIBE if available
         if let Some(router_result) = self.try_moe_describe(entity, band, layer, verbose)? {
             return Ok(router_result);
@@ -486,63 +487,79 @@ impl Session {
         }
 
         // ── Format edges ──
-        // Default mode: clean, scannable, demo-ready. Top 10 per band.
-        //   Probe labels shown. Cluster labels hidden (blank). No also-tokens.
-        //   Single primary layer. Fixed-width columns.
-        // Verbose mode: everything. Raw cluster labels. Also-tokens. Layer ranges.
+        // Verbose (default): relation labels in brackets, also-tokens, layer ranges, multi-layer hits.
+        //   Probe labels shown as [relation]. Unlabelled features shown as [—].
+        // Brief: compact top edges only, primary layer, no also-tokens.
+        // Raw: like verbose but no probe/cluster labels — pure model signal.
 
-        let max_edges = if verbose { 30 } else { 10 };
+        let max_edges = if mode == crate::ast::DescribeMode::Brief { 10 } else { 30 };
 
         let format_edge = |edge: &FormattedEdge| -> String {
-            if verbose {
-                // Verbose: show all labels, also-tokens, layer ranges, counts
-                let label = if edge.label.is_empty() {
-                    format!("{:<14}", "")
-                } else {
-                    format!("{:<14}", edge.label)
-                };
+            match mode {
+                crate::ast::DescribeMode::Verbose => {
+                    // Show relation label in brackets: [capital], [language], or [—]
+                    let bracket_label = if edge.label.is_empty() {
+                        format!("{:<14}", "[—]")
+                    } else {
+                        let tag = format!("[{}]", edge.label);
+                        format!("{:<14}", tag)
+                    };
 
-                let tag = if edge.is_probe {
-                    "  (probe)"
-                } else if edge.is_cluster {
-                    "  (cluster)"
-                } else {
-                    ""
-                };
+                    let min_l = *edge.layers.iter().min().unwrap_or(&0);
+                    let max_l = *edge.layers.iter().max().unwrap_or(&0);
+                    let layer_str = if min_l == max_l {
+                        format!("L{}", min_l)
+                    } else {
+                        format!("L{}-{}", min_l, max_l)
+                    };
 
-                let min_l = *edge.layers.iter().min().unwrap_or(&0);
-                let max_l = *edge.layers.iter().max().unwrap_or(&0);
-                let layer_str = if min_l == max_l {
-                    format!("L{}", min_l)
-                } else {
-                    format!("L{}-{}", min_l, max_l)
-                };
+                    let also = if edge.also.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  also: {}", edge.also.join(", "))
+                    };
 
-                let also = if edge.also.is_empty() {
-                    String::new()
-                } else {
-                    format!("  also: {}", edge.also.join(", "))
-                };
+                    format!(
+                        "    {} → {:20} {:>7.1}  {:<8} {}x{}",
+                        bracket_label, edge.target, edge.gate, layer_str,
+                        edge.count, also,
+                    )
+                }
+                crate::ast::DescribeMode::Brief => {
+                    // Compact: probe labels only, primary layer, no also-tokens
+                    let label = if edge.is_probe {
+                        format!("{:<12}", edge.label)
+                    } else {
+                        format!("{:<12}", "")
+                    };
 
-                format!(
-                    "    {} → {:20} {:>7.1}  {:<8} {}x{}{}",
-                    label, edge.target, edge.gate, layer_str,
-                    edge.count, tag, also,
-                )
-            } else {
-                // Default: clean columns, probe labels only, primary layer
-                let label = if edge.is_probe {
-                    format!("{:<12}", edge.label)
-                } else {
-                    format!("{:<12}", "")
-                };
+                    format!(
+                        "    {} → {:20} {:>7.1}  L{:<3}",
+                        label, edge.target, edge.gate, edge.primary_layer,
+                    )
+                }
+                crate::ast::DescribeMode::Raw => {
+                    // No labels — pure model signal with also-tokens and layer ranges
+                    let min_l = *edge.layers.iter().min().unwrap_or(&0);
+                    let max_l = *edge.layers.iter().max().unwrap_or(&0);
+                    let layer_str = if min_l == max_l {
+                        format!("L{}", min_l)
+                    } else {
+                        format!("L{}-{}", min_l, max_l)
+                    };
 
-                let tag = if edge.is_probe { "  (probe)" } else { "" };
+                    let also = if edge.also.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  also: {}", edge.also.join(", "))
+                    };
 
-                format!(
-                    "    {} → {:20} {:>7.1}  L{:<3}{}",
-                    label, edge.target, edge.gate, edge.primary_layer, tag,
-                )
+                    format!(
+                        "                 → {:20} {:>7.1}  {:<8} {}x{}",
+                        edge.target, edge.gate, layer_str,
+                        edge.count, also,
+                    )
+                }
             }
         };
 
@@ -560,7 +577,7 @@ impl Session {
         }
         if !output_band.is_empty() {
             out.push(format!("  Output (L{}-{}):", bands.output.0, bands.output.1));
-            for edge in output_band.iter().take(if verbose { max_edges } else { 5 }) {
+            for edge in output_band.iter().take(if mode == crate::ast::DescribeMode::Brief { 5 } else { max_edges }) {
                 out.push(format_edge(edge));
             }
         }
@@ -591,7 +608,7 @@ impl Session {
         let entity_filter = conditions.iter().find(|c| c.field == "entity").and_then(|c| {
             if let Value::String(ref s) = c.value { Some(s.as_str()) } else { None }
         });
-        let _relation_filter = conditions.iter().find(|c| c.field == "relation").and_then(|c| {
+        let relation_filter = conditions.iter().find(|c| c.field == "relation").and_then(|c| {
             if let Value::String(ref s) = c.value { Some(s.as_str()) } else { None }
         });
         let layer_filter = conditions.iter().find(|c| c.field == "layer").and_then(|c| {
@@ -605,37 +622,120 @@ impl Session {
             layer: usize,
             feature: usize,
             top_token: String,
+            relation: String,
             c_score: f32,
         }
 
         let mut rows: Vec<Row> = Vec::new();
+        let classifier = self.relation_classifier();
 
         let scan_layers: Vec<usize> = if let Some(l) = layer_filter {
             vec![l]
         } else {
-            all_layers
+            all_layers.clone()
         };
 
-        for layer in &scan_layers {
-            if let Some(metas) = patched.down_meta_at(*layer) {
-                for (feat_idx, meta_opt) in metas.iter().enumerate() {
-                    if let Some(feature_f) = feature_filter {
-                        if feat_idx != feature_f {
-                            continue;
-                        }
+        // When entity + relation are both specified, use walk-based lookup:
+        // embed the entity, walk all layers, find features that fire,
+        // then filter by relation label. This finds "capital features that
+        // activate for France" rather than "capital features whose top token
+        // contains France".
+        if entity_filter.is_some() && relation_filter.is_some() {
+            let entity = entity_filter.unwrap();
+            let rel = relation_filter.unwrap();
+
+            let (embed, embed_scale) = larql_vindex::load_vindex_embeddings(path)
+                .map_err(|e| LqlError::Execution(format!("failed to load embeddings: {e}")))?;
+            let tokenizer = larql_vindex::load_vindex_tokenizer(path)
+                .map_err(|e| LqlError::Execution(format!("failed to load tokenizer: {e}")))?;
+
+            let encoding = tokenizer
+                .encode(entity, false)
+                .map_err(|e| LqlError::Execution(format!("tokenize error: {e}")))?;
+            let token_ids: Vec<u32> = encoding.get_ids().to_vec();
+
+            if !token_ids.is_empty() {
+                let hidden = embed.shape()[1];
+                let query = if token_ids.len() == 1 {
+                    embed.row(token_ids[0] as usize).mapv(|v| v * embed_scale)
+                } else {
+                    let mut avg = larql_vindex::ndarray::Array1::<f32>::zeros(hidden);
+                    for &tok in &token_ids {
+                        avg += &embed.row(tok as usize).mapv(|v| v * embed_scale);
                     }
-                    if let Some(meta) = meta_opt {
-                        if let Some(ent) = entity_filter {
-                            if !meta.top_token.to_lowercase().contains(&ent.to_lowercase()) {
+                    avg /= token_ids.len() as f32;
+                    avg
+                };
+
+                let trace = patched.walk(&query, &scan_layers, 50);
+
+                for (layer_idx, hits) in &trace.layers {
+                    for hit in hits {
+                        if let Some(feature_f) = feature_filter {
+                            if hit.feature != feature_f {
                                 continue;
                             }
                         }
+                        let rel_label = classifier
+                            .and_then(|rc| rc.label_for_feature(*layer_idx, hit.feature))
+                            .unwrap_or("")
+                            .to_string();
+                        if rel_label.is_empty() {
+                            continue;
+                        }
+                        let rel_norm = rel.to_lowercase();
+                        let label_norm = rel_label.to_lowercase();
+                        if !label_norm.contains(&rel_norm) && !rel_norm.contains(&label_norm) {
+                            continue;
+                        }
                         rows.push(Row {
-                            layer: *layer,
-                            feature: feat_idx,
-                            top_token: meta.top_token.clone(),
-                            c_score: meta.c_score,
+                            layer: *layer_idx,
+                            feature: hit.feature,
+                            top_token: hit.meta.top_token.clone(),
+                            relation: rel_label,
+                            c_score: hit.gate_score,
                         });
+                    }
+                }
+            }
+        } else {
+            // Standard scan: filter down_meta by top_token and/or relation label
+            for layer in &scan_layers {
+                if let Some(metas) = patched.down_meta_at(*layer) {
+                    for (feat_idx, meta_opt) in metas.iter().enumerate() {
+                        if let Some(feature_f) = feature_filter {
+                            if feat_idx != feature_f {
+                                continue;
+                            }
+                        }
+                        if let Some(meta) = meta_opt {
+                            if let Some(ent) = entity_filter {
+                                if !meta.top_token.to_lowercase().contains(&ent.to_lowercase()) {
+                                    continue;
+                                }
+                            }
+                            let rel_label = classifier
+                                .and_then(|rc| rc.label_for_feature(*layer, feat_idx))
+                                .unwrap_or("")
+                                .to_string();
+                            if let Some(rel) = relation_filter {
+                                if rel_label.is_empty() {
+                                    continue;
+                                }
+                                let rel_norm = rel.to_lowercase();
+                                let label_norm = rel_label.to_lowercase();
+                                if !label_norm.contains(&rel_norm) && !rel_norm.contains(&label_norm) {
+                                    continue;
+                                }
+                            }
+                            rows.push(Row {
+                                layer: *layer,
+                                feature: feat_idx,
+                                top_token: meta.top_token.clone(),
+                                relation: rel_label,
+                                c_score: meta.c_score,
+                            });
+                        }
                     }
                 }
             }
@@ -661,18 +761,36 @@ impl Session {
 
         rows.truncate(limit);
 
+        let show_relation = relation_filter.is_some()
+            || rows.iter().any(|r| !r.relation.is_empty());
+
         let mut out = Vec::new();
-        out.push(format!(
-            "{:<8} {:<8} {:<20} {:>10}",
-            "Layer", "Feature", "Token", "Score"
-        ));
-        out.push("-".repeat(50));
+        if show_relation {
+            out.push(format!(
+                "{:<8} {:<8} {:<20} {:<20} {:>10}",
+                "Layer", "Feature", "Token", "Relation", "Score"
+            ));
+            out.push("-".repeat(70));
+        } else {
+            out.push(format!(
+                "{:<8} {:<8} {:<20} {:>10}",
+                "Layer", "Feature", "Token", "Score"
+            ));
+            out.push("-".repeat(50));
+        }
 
         for row in &rows {
-            out.push(format!(
-                "L{:<7} F{:<7} {:20} {:>10.4}",
-                row.layer, row.feature, row.top_token, row.c_score
-            ));
+            if show_relation {
+                out.push(format!(
+                    "L{:<7} F{:<7} {:20} {:20} {:>10.4}",
+                    row.layer, row.feature, row.top_token, row.relation, row.c_score
+                ));
+            } else {
+                out.push(format!(
+                    "L{:<7} F{:<7} {:20} {:>10.4}",
+                    row.layer, row.feature, row.top_token, row.c_score
+                ));
+            }
         }
 
         if rows.is_empty() {

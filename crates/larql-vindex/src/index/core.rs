@@ -48,6 +48,10 @@ pub trait GateIndex {
 
     /// Number of features at a layer.
     fn num_features(&self, layer: usize) -> usize;
+
+    /// Get a custom down vector override for a feature.
+    /// When present, sparse_ffn_forward should use this instead of the model's down weight row.
+    fn down_override(&self, _layer: usize, _feature: usize) -> Option<&[f32]> { None }
 }
 
 /// Progress callbacks for index loading.
@@ -171,6 +175,11 @@ pub struct VectorIndex {
 
     /// Hidden dimension.
     pub hidden_size: usize,
+
+    /// Down vector overrides: custom output vectors for specific features.
+    /// When set, sparse_ffn_forward uses this instead of the model's down weight row.
+    /// Key: (layer, feature), Value: hidden_size f32 vector.
+    pub(crate) down_overrides: HashMap<(usize, usize), Vec<f32>>,
 }
 
 impl VectorIndex {
@@ -190,6 +199,7 @@ impl VectorIndex {
             down_meta_mmap: None,
             num_layers,
             hidden_size,
+            down_overrides: HashMap::new(),
         }
     }
 
@@ -212,6 +222,7 @@ impl VectorIndex {
             down_meta_mmap: down_meta_mmap.map(Arc::new),
             num_layers,
             hidden_size,
+            down_overrides: HashMap::new(),
         }
     }
 
@@ -362,6 +373,7 @@ impl VectorIndex {
             gate_mmap_slices: Vec::new(),
             down_meta: gate_meta,
             down_meta_mmap: None,
+            down_overrides: HashMap::new(),
             num_layers,
             hidden_size,
         })
@@ -465,7 +477,13 @@ impl VectorIndex {
         residual: &Array1<f32>,
         top_k: usize,
     ) -> Vec<(usize, f32)> {
-        // Try mmap path first (zero-copy for f32, per-layer decode for f16)
+        // If this layer was promoted to heap (e.g. via set_gate_vector), use heap path
+        if let Some(Some(ref matrix)) = self.gate_vectors.get(layer) {
+            let scores = matrix.dot(residual);
+            return Self::top_k_from_scores(&scores, top_k);
+        }
+
+        // Try mmap path (zero-copy for f32, per-layer decode for f16)
         if let Some(ref mmap) = self.gate_mmap_bytes {
             if let Some(slice) = self.gate_mmap_slices.get(layer) {
                 if slice.num_features == 0 { return vec![]; }
@@ -525,6 +543,17 @@ impl VectorIndex {
         feat_end: usize,
         top_k: usize,
     ) -> Vec<(usize, f32)> {
+        // If promoted to heap, use heap path
+        if let Some(Some(ref matrix)) = self.gate_vectors.get(layer) {
+            let end = feat_end.min(matrix.shape()[0]);
+            if feat_start >= end { return vec![]; }
+            let slice = matrix.slice(ndarray::s![feat_start..end, ..]);
+            let scores = slice.dot(residual);
+            let mut hits = Self::top_k_from_scores(&scores, top_k);
+            for hit in &mut hits { hit.0 += feat_start; }
+            return hits;
+        }
+
         if let Some(ref mmap) = self.gate_mmap_bytes {
             if let Some(slice) = self.gate_mmap_slices.get(layer) {
                 if slice.num_features == 0 || feat_start >= slice.num_features { return vec![]; }
@@ -785,5 +814,9 @@ impl GateIndex for VectorIndex {
 
     fn num_features(&self, layer: usize) -> usize {
         self.num_features(layer)
+    }
+
+    fn down_override(&self, layer: usize, feature: usize) -> Option<&[f32]> {
+        self.down_overrides.get(&(layer, feature)).map(|v| v.as_slice())
     }
 }

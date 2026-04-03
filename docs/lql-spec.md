@@ -223,12 +223,20 @@ DESCRIBE <entity>
     [{ALL LAYERS | SYNTAX | KNOWLEDGE | OUTPUT}]
     [AT LAYER <n>]
     [RELATIONS ONLY]
+    [{VERBOSE | BRIEF | RAW}]
 
 -- Show all knowledge for an entity. Groups by layer band:
 --   SYNTAX:     morphological, syntactic, code structure features
 --   KNOWLEDGE:  semantic/factual features (default view)
 --   OUTPUT:     formatting/output features
 --   ALL LAYERS: show all three bands
+--
+-- Display modes:
+--   VERBOSE (default): relation labels in [brackets], also-tokens,
+--                      layer ranges, multi-layer hit counts.
+--                      Labelled features show [relation], unlabelled show [—].
+--   BRIEF:   compact view — top edges only, primary layer, no also-tokens.
+--   RAW:     no probe/cluster labels — pure model signal with also-tokens.
 --
 -- Layer band boundaries are model-specific, stored in index.json:
 --   Gemma 3 4B:  syntax=0-13, knowledge=14-27, output=28-33
@@ -248,7 +256,13 @@ DESCRIBE <entity>
 -- layer range, occurrence count, and "also:" variant tokens.
 
 DESCRIBE "France";
--- Shows knowledge edges (L14-27) by default
+-- Verbose by default: relation labels, also-tokens, layer ranges
+
+DESCRIBE "France" BRIEF;
+-- Compact: top edges, primary layer only
+
+DESCRIBE "France" RAW;
+-- No labels — pure model signal
 
 DESCRIBE "France" ALL LAYERS;
 -- Shows syntax (L0-13) + knowledge (L14-27) + output (L28-33)
@@ -806,42 +820,46 @@ These are estimates. The actual boundaries are discoverable via `SHOW LAYERS` �
 
 ### 5.4 DESCRIBE Output Format
 
+**Verbose (default):** relation labels in brackets, also-tokens, layer ranges.
+
 ```
 larql> DESCRIBE "France";
 France
   Edges (L14-27):
-    capital        → Paris           gate=1436.9  L27-27  1x  (probe)
-    language       → French          gate=35.2    L24-32  4x  (probe)
-    continent      → Europe          gate=14.4    L25-25  1x  (probe)
-    borders        → Spain           gate=13.3    L18-18  1x  (probe)  also: España, Europe, Germany
-    country        → Australia       gate=25.1    L26-26  1x  (cluster) also: Italy, Germany, Spain
+    [capital]      → Paris                    9.2  L27      1x  also: Francia, París
+    [language]     → français                14.7  L23      1x  also: French, oiseaux
+    [continent]    → Europe                  14.4  L10-25   4x  also: Belgique, Lesotho
+    [—]            → Spain                   13.3  L18      1x  also: España, Germany
+    [—]            → Senegal                  9.4  L16      1x  also: Algeria, Moroccan
+    [—]            → Channel                  7.2  L26      1x  also: channels, Channels
   Output (L28-33):
-                   → German          gate=15.0    L30-30  1x  also: Dutch, Dutch, Italian
-                   → European        gate=11.9    L33-33  1x  also: Europe, Europe, Europeans
-
-larql> DESCRIBE "def" SYNTAX;
-def
-  Syntax (L0-13):
-    py:function_def → init           gate=12.3    L4-8   3x  (ast)
-    py:function_def → forward        gate=11.1    L6-6   1x  (ast)
-    py:function_def → main           gate=9.8     L5-5   1x  (ast)
-
-larql> DESCRIBE "France" ALL LAYERS;
-France
-  Syntax (L0-13):
-    morphological  → français        gate=8.2     L3-3   1x
-    derivation     → French          gate=6.1     L7-7   1x  (wordnet)
-  Edges (L14-27):
-    capital        → Paris           gate=1436.9  L27-27  1x  (probe)
-    language       → French          gate=35.2    L24-32  4x  (probe)
-    continent      → Europe          gate=14.4    L25-25  1x  (probe)
-    borders        → Spain           gate=13.3    L18-18  1x  (probe)
-  Output (L28-33):
-                   → German          gate=15.0    L30-30  1x
-                   → European        gate=11.9    L33-33  1x
+    [—]            → French                  35.2  L15-32   8x  also: Conseil
+    [—]            → European                11.9  L11-33   7x  also: EUROPE, Euro, German
 ```
 
-The `(probe)`, `(cluster)`, `(wordnet)`, `(ast)` tags show the label source. Edges with no tag use TF-IDF fallback labels.
+Labelled features show `[relation]` (from probe or cluster). Unlabelled features show `[—]` — model-discovered associations the probes didn't cover. The `also:` column shows what cluster each feature belongs to.
+
+**Brief:** compact, top edges only.
+
+```
+larql> DESCRIBE "France" BRIEF;
+France
+  Edges (L14-27):
+                 → Paris                    9.2  L27
+                 → français                14.7  L23
+                 → Europe                  14.4  L25
+```
+
+**Raw:** no labels, pure model signal.
+
+```
+larql> DESCRIBE "France" RAW;
+France
+  Edges (L14-27):
+                 → Paris                    9.2  L27      1x  also: Francia, París
+                 → français                14.7  L23      1x  also: French, oiseaux
+                 → Europe                  14.4  L10-25   4x  also: Belgique, Lesotho
+```
 
 ---
 
@@ -884,16 +902,17 @@ SHOW RELATIONS WITH EXAMPLES;
 
 DESCRIBE "France";
 -- France
---   capital   → Paris      (probe, 0.97)
---   language  → French     (probe, 0.95)
---   continent → Europe     (probe, 0.92)
---   borders   → Spain      (probe, 0.89)
+--   Edges (L14-27):
+--     [capital]      → Paris                    9.2  L27      1x  also: Francia, París
+--     [language]     → français                14.7  L23      1x  also: French, oiseaux
+--     [continent]    → Europe                  14.4  L10-25   4x  also: Belgique, Lesotho
+--     [—]            → Spain                   13.3  L18      1x  also: España, Germany
 
 DESCRIBE "Einstein";
 -- Einstein
---   occupation  → physicist    (probe, 0.94)
---   birthplace  → Ulm          (probe, 0.88)
---   nationality → German       (probe, 0.91)
+--   Edges (L14-27):
+--     [—]            → phys                     7.1  L27      1x  also: physics, quantum
+--     [—]            → astronomy                6.1  L25      1x  also: planets, science
 
 DESCRIBE "def" SYNTAX;
 -- def
@@ -1002,7 +1021,7 @@ pub enum Statement {
              nearest: Option<NearestClause>, order: Option<OrderBy>,
              limit: Option<u32> },
     Describe { entity: String, band: Option<LayerBand>, layer: Option<u32>,
-               relations_only: bool },
+               relations_only: bool, mode: DescribeMode },
     Explain { prompt: String, mode: ExplainMode, layers: Option<Range>,
               verbose: bool, top: Option<u32> },
 
@@ -1043,6 +1062,12 @@ pub enum LayerBand {
     Knowledge,     // Middle layers: DESCRIBE "France" KNOWLEDGE (default)
     Output,        // Late layers: DESCRIBE "France" OUTPUT
     All,           // All layers: DESCRIBE "France" ALL LAYERS
+}
+
+pub enum DescribeMode {
+    Verbose,       // Default: [relation] labels, also-tokens, layer ranges
+    Brief,         // Compact: top edges, primary layer, no also-tokens
+    Raw,           // No labels — pure model signal with also-tokens
 }
 
 pub enum ExplainMode {

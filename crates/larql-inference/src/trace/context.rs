@@ -27,7 +27,7 @@
 //! Mmap'd, append-only, zero-copy reads.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write, Seek, SeekFrom};
+use std::io::{self, Write, Seek, SeekFrom};
 use std::path::Path;
 
 use memmap2::Mmap;

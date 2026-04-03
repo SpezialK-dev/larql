@@ -30,6 +30,14 @@ blas-src = { version = "0.10", features = ["accelerate"] }
 # Tokenizer
 tokenizers = "0.21"
 
+# GPU backend (optional)
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = { version = "0.29", optional = true }
+
+[features]
+default = []
+metal = ["dep:metal"]
+
 [dev-dependencies]
 assert_approx_eq = "1"
 tempfile = "3"

@@ -57,7 +57,7 @@ pub enum Statement {
         band: Option<LayerBand>,
         layer: Option<u32>,
         relations_only: bool,
-        verbose: bool,
+        mode: DescribeMode,
     },
     Explain {
         prompt: String,
@@ -156,6 +156,21 @@ pub enum ExplainMode {
     Walk,
     /// EXPLAIN INFER — full inference with feature trace
     Infer,
+}
+
+/// Display mode for DESCRIBE output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DescribeMode {
+    /// Default: relation labels, also-tokens, layer ranges, multi-layer hits.
+    Verbose,
+    /// Compact: top edges only, primary layer, no also-tokens.
+    Brief,
+    /// No probe labels — pure model signal.
+    Raw,
+}
+
+impl Default for DescribeMode {
+    fn default() -> Self { Self::Verbose }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

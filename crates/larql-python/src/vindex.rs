@@ -798,6 +798,49 @@ impl PyVindex {
         Ok((target_layer, feature))
     }
 
+    /// Low-level: find a free feature slot at a layer.
+    fn find_free_feature(&self, layer: usize) -> Option<usize> {
+        self.index.find_free_feature(layer)
+    }
+
+    /// Low-level: set a gate vector directly. For constellation insert experiments.
+    fn set_gate_vector(&mut self, layer: usize, feature: usize, vector: Vec<f32>) -> PyResult<()> {
+        let arr = Array1::from_vec(vector);
+        self.index.set_gate_vector(layer, feature, &arr);
+        Ok(())
+    }
+
+    /// Low-level: set a custom down vector override for a feature.
+    /// During inference, this vector is used instead of the model's down weight row.
+    fn set_down_vector(&mut self, layer: usize, feature: usize, vector: Vec<f32>) -> PyResult<()> {
+        self.index.set_down_vector(layer, feature, vector);
+        Ok(())
+    }
+
+    /// Low-level: set feature metadata directly.
+    #[pyo3(signature = (layer, feature, top_token, c_score=0.9))]
+    fn set_feature_meta(
+        &mut self, layer: usize, feature: usize, top_token: &str, c_score: f32
+    ) -> PyResult<()> {
+        let token_encoding = self.tokenizer.encode(top_token, false)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let token_ids = token_encoding.get_ids();
+        let token_id = token_ids.first().copied().unwrap_or(0);
+
+        let meta = FeatureMeta {
+            top_token: top_token.to_string(),
+            top_token_id: token_id,
+            c_score,
+            top_k: vec![larql_models::TopKEntry {
+                token: top_token.to_string(),
+                token_id: token_id,
+                logit: c_score,
+            }],
+        };
+        self.index.set_feature_meta(layer, feature, meta);
+        Ok(())
+    }
+
     /// Delete edges matching an entity (and optionally a relation).
     #[pyo3(signature = (entity, relation=None, layer=None))]
     fn delete(
@@ -918,6 +961,130 @@ impl PyVindex {
         );
 
         Ok(result.predictions)
+    }
+
+    /// Run inference and capture per-layer residuals (last token position).
+    ///
+    /// Returns (predictions, residuals) where:
+    ///   predictions: list of (token, probability) tuples
+    ///   residuals: list of numpy arrays, one per layer — the actual residual
+    ///              the gate_knn sees during inference at that layer.
+    ///
+    /// Use these residuals to synthesise gate vectors that match the inference
+    /// path, not just the raw embedding.
+    #[pyo3(signature = (prompt, top_k_predictions=5, top_k_features=8192))]
+    fn infer_trace<'py>(
+        &self, py: Python<'py>, prompt: &str,
+        top_k_predictions: usize, top_k_features: usize
+    ) -> PyResult<(Vec<(String, f64)>, Vec<Bound<'py, PyArray1<f32>>>)> {
+        {
+            let mut state = self.walk_model.borrow_mut();
+            if state.is_none() {
+                let dir = std::path::Path::new(&self.path);
+                *state = Some(crate::walk::InferState::load(dir)
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(
+                        format!("Failed to load model weights: {e}")
+                    ))?);
+            }
+        }
+
+        let state = self.walk_model.borrow();
+        let infer_state = state.as_ref().unwrap();
+
+        let encoding = self.tokenizer.encode(prompt, true)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let token_ids: Vec<u32> = encoding.get_ids().to_vec();
+
+        let walk_ffn = larql_inference::WalkFfn::new(&infer_state.weights, &self.index, top_k_features);
+        let result = larql_inference::predict_with_ffn_trace(
+            &infer_state.weights, &self.tokenizer, &token_ids, top_k_predictions, &walk_ffn
+        );
+
+        let residuals: Vec<Bound<'py, PyArray1<f32>>> = result.residuals.into_iter()
+            .map(|r| r.into_pyarray(py))
+            .collect();
+
+        Ok((result.predictions, residuals))
+    }
+
+    /// Find features whose down weight vectors project toward a target token.
+    ///
+    /// For each feature at the given layers, computes:
+    ///   score = lm_head[token_id] · down_weight[layer, feature]
+    ///
+    /// Returns list of (layer, feature, score, top_token) sorted by score descending.
+    /// Only returns features with score > 0.
+    #[pyo3(signature = (target, layers=None, top_k=20))]
+    fn find_features_by_target(
+        &self, target: &str, layers: Option<Vec<usize>>, top_k: usize
+    ) -> PyResult<Vec<(usize, usize, f32, String)>> {
+        // Load inference weights if not already loaded
+        {
+            let mut state = self.walk_model.borrow_mut();
+            if state.is_none() {
+                let dir = std::path::Path::new(&self.path);
+                *state = Some(crate::walk::InferState::load(dir)
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(
+                        format!("Failed to load model weights: {e}")
+                    ))?);
+            }
+        }
+
+        let state = self.walk_model.borrow();
+        let infer_state = state.as_ref().unwrap();
+        let weights = &infer_state.weights;
+
+        // Tokenize target — use first token
+        let encoding = self.tokenizer.encode(target, false)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let token_ids = encoding.get_ids();
+        if token_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Get the lm_head row for the target token — this is what the residual
+        // needs to align with to produce this token as output.
+        // lm_head shape: (vocab_size, hidden_size)
+        let target_id = token_ids[0] as usize;
+        let lm_head_row = weights.lm_head.row(target_id);
+
+        let scan_layers = layers.unwrap_or_else(|| self.index.loaded_layers());
+
+        let mut results: Vec<(usize, usize, f32, String)> = Vec::new();
+
+        for &layer in &scan_layers {
+            let arch = &*weights.arch;
+            let down_key = arch.ffn_down_key(layer);
+            let down_weights = match weights.tensors.get(&down_key) {
+                Some(w) => w,
+                None => continue,
+            };
+            // down_weights shape: (intermediate_size, hidden_size)
+            // Each row is a feature's down projection vector.
+            let num_features = down_weights.shape()[0];
+
+            for feat in 0..num_features {
+                let down_row = down_weights.row(feat);
+                // Score: how much does this feature's output align with the target token?
+                let score: f32 = lm_head_row.iter()
+                    .zip(down_row.iter())
+                    .map(|(a, b)| a * b)
+                    .sum();
+
+                if score > 0.0 {
+                    let token = self.index.feature_meta(layer, feat)
+                        .map(|m| m.top_token.clone())
+                        .unwrap_or_default();
+                    results.push((layer, feat, score, token));
+                }
+            }
+        }
+
+        // Sort by score descending and take top_k
+        results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(top_k);
+
+        Ok(results)
     }
 
     fn __repr__(&self) -> String {

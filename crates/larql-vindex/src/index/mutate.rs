@@ -47,6 +47,12 @@ impl VectorIndex {
         }
     }
 
+    /// Set a custom down vector override for a feature.
+    /// During sparse FFN, this vector is used instead of the model's down weight row.
+    pub fn set_down_vector(&mut self, layer: usize, feature: usize, vector: Vec<f32>) {
+        self.down_overrides.insert((layer, feature), vector);
+    }
+
     /// Copy a layer's gate vectors from mmap to heap (for mutation).
     fn promote_layer_to_heap(&mut self, layer: usize) {
         if let Some(ref mmap) = self.gate_mmap_bytes {

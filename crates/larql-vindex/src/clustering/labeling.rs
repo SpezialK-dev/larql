@@ -5,7 +5,6 @@
 //! 2. Member-based: average member embeddings → nearest category word
 
 use ndarray::Array1;
-use larql_models::WeightArray;
 use std::collections::HashMap;
 
 use super::categories::{category_words, is_stop_word};

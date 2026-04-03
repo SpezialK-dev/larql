@@ -384,7 +384,7 @@ pub fn build_vindex_streaming(
 
     // ── 5. Config ──
     let family = arch.family().to_string();
-    let mut config = VindexConfig {
+    let config = VindexConfig {
         version: 2,
         model: model_name.to_string(),
         family: family.clone(),

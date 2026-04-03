@@ -7,7 +7,7 @@
 use ndarray::Array2;
 
 use crate::ffn::FfnBackend;
-use crate::ffn::sparse_compute::sparse_ffn_forward;
+use crate::ffn::sparse_compute::{sparse_ffn_forward, sparse_ffn_forward_with_overrides};
 use crate::model::ModelWeights;
 
 use larql_vindex::{GateIndex, WalkHit, WalkTrace};
@@ -89,8 +89,17 @@ impl<'a> FfnBackend for WalkFfn<'a> {
             }
             let features: Vec<usize> = all_features.into_iter().collect();
 
+            // Collect down vector overrides for selected features
+            let overrides: Vec<(usize, &[f32])> = features.iter()
+                .filter_map(|&f| self.index.down_override(layer, f).map(|v| (f, v)))
+                .collect();
+
             // Sparse FFN: compute gate/up/down for selected features only
-            sparse_ffn_forward(self.weights, layer, x, &features)
+            if overrides.is_empty() {
+                sparse_ffn_forward(self.weights, layer, x, &features)
+            } else {
+                sparse_ffn_forward_with_overrides(self.weights, layer, x, &features, &overrides)
+            }
         } else {
             // No vindex data for this layer — fall back to dense
             let dense_ffn = crate::ffn::WeightFfn { weights: self.weights };

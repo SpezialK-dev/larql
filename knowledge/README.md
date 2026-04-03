@@ -38,9 +38,11 @@ python3 scripts/fetch_morphological.py
 # Extract AST pairs from local stdlibs (Rust, JS, TS, C, etc.)
 python3 scripts/extract_all_ast_pairs.py --stdlib
 
-# Run the full probe (requires MLX on Apple Silicon)
+# Run probes (requires MLX on Apple Silicon)
 pip install mlx mlx-lm
-python3 scripts/probe_mlx.py --model google/gemma-3-4b-it
+python3 scripts/probe_mlx.py --model google/gemma-3-4b-it --layers knowledge  # Wikidata (L14-27)
+python3 scripts/probe_mlx.py --model google/gemma-3-4b-it --layers syntax     # WordNet/AST (L0-13)
+python3 scripts/probe_mlx.py --model google/gemma-3-4b-it --layers all        # Both
 
 # Run tests
 python3 -m pytest tests/ -v
@@ -111,7 +113,7 @@ src/larql_knowledge/          # Python package (pip installable)
   triples.py                  # Triple loading, assembly, merging
   cli.py                      # CLI entry point
 
-tests/                        # 680 tests
+tests/                        # 685 tests
   test_triples_format.py      #   Validates all 144 triple files
   test_templates.py           #   Validates 142 template relations
   test_treesitter_extract.py  #   23 tests for 19-language AST extraction
@@ -122,7 +124,8 @@ tests/                        # 680 tests
   test_labels.py              #   Probe label format
   test_probe_output.py        #   Probe output validation
   test_triples.py             #   Triple loading/merging
-  test_probe_matching.py      #   Normalize + match index logic (14 tests)
+  test_probe_matching.py      #   Normalize + match index logic
+  test_syntax_data.py         #   Syntax data loading (WordNet, morphological, AST)
 ```
 
 ## Data Pipeline
@@ -375,37 +378,44 @@ Edit `data/probe_templates.json`:
 
 Each relation should have 2-3 template variants to maximize probe coverage.
 
-### Running Probes for a New Model
+### Running Probes
 
-The probe is model-agnostic and decoupled from the vindex. You can probe any MLX-compatible model:
+The probe is model-agnostic, decoupled from the vindex, resumable, and supports multiple layer bands:
 
 ```bash
-# Prediction-only mode (no vindex needed)
-python3 scripts/probe_mlx.py --model google/gemma-3-4b-it
+# Knowledge layers only (default — Wikidata triples, L14-27)
+python3 scripts/probe_mlx.py --model google/gemma-3-4b-it \
+  --vindex output/gemma3-4b-f16.vindex
+
+# Syntax layers only (WordNet, morphological, AST, L0-13)
+python3 scripts/probe_mlx.py --model google/gemma-3-4b-it \
+  --vindex output/gemma3-4b-f16.vindex --layers syntax
+
+# Both knowledge + syntax
+python3 scripts/probe_mlx.py --model google/gemma-3-4b-it \
+  --vindex output/gemma3-4b-f16.vindex --layers all
+
+# Specific relations only
+python3 scripts/probe_mlx.py --model google/gemma-3-4b-it \
+  --vindex output/gemma3-4b-f16.vindex --relations capital,language,continent
+
+# Resume interrupted probe
+python3 scripts/probe_mlx.py --model google/gemma-3-4b-it \
+  --vindex output/gemma3-4b-f16.vindex --resume
+
+# Any MLX-compatible model (no vindex needed for prediction-only)
 python3 scripts/probe_mlx.py --model mlx-community/Meta-Llama-3-8B-4bit
-
-# With vindex (enables gate matching + prediction matching)
-python3 scripts/probe_mlx.py --model google/gemma-3-4b-it --vindex output/gemma3-4b.vindex
-
-# Full options
-python3 scripts/probe_mlx.py \
-  --model <model_id> \
-  --vindex <path_to_vindex> \
-  --triples data/wikidata_triples.json \
-  --templates data/probe_templates.json \
-  --output probes/ \
-  --top-k 50 \
-  --min-gate-score 5.0
-
-# Labels are saved to:
-#   probes/<model-slug>/feature_labels.json (always)
-#   <vindex>/feature_labels.json (if vindex provided)
 ```
+
+Output files:
+- `feature_labels.json` — flat format for engine (`{"L26_F943": "currency"}`)
+- `feature_labels_rich.json` — multi-label with confidence, entities, outputs
+- `probe_progress.tsv` — checkpoint for resume
 
 ## Testing
 
 ```bash
-# Run all 680 tests
+# Run all tests
 python3 -m pytest tests/ -v
 
 # Run specific test groups
@@ -425,7 +435,7 @@ python3 -m pytest tests/test_wikidata_combined.py -v    # Combined triples
 - **10 morphological relations**, 3,952 pairs
 - **5 AST languages** (Python, Rust, JavaScript, TypeScript, C), 13,012 pairs
 - **157 probe-confirmed features** for gemma-3-4b-it
-- **680 tests**, all passing
+- **685 tests**, all passing
 
 ## Label Priority
 

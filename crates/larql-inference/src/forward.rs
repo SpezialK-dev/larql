@@ -37,6 +37,15 @@ pub struct PredictResult {
     pub predictions: Vec<(String, f64)>,
 }
 
+/// Prediction result with per-layer residual capture.
+pub struct PredictResultWithResiduals {
+    /// Top-k predicted tokens as (token_string, probability).
+    pub predictions: Vec<(String, f64)>,
+    /// Per-layer residual vectors (last token position only).
+    /// Index i contains the residual BEFORE layer i's FFN (i.e., after attention).
+    pub residuals: Vec<Vec<f32>>,
+}
+
 /// Per-layer computation strategy.
 pub enum LayerMode<'a> {
     /// Run full attention + FFN with the given backend.
@@ -290,23 +299,25 @@ fn logits_to_predictions(
 
     let h_final = apply_norm(weights, h, weights.arch.final_norm_key(), norm_offset);
 
-    let last = h_final.row(seq_len - 1);
     let logits_scale = weights.arch.logits_scaling();
     let final_softcap = weights.arch.final_logit_softcapping();
-    let mut logits: Vec<f32> = Vec::with_capacity(weights.vocab_size);
-    for tok_id in 0..weights.vocab_size {
-        let lm_row = weights.lm_head.row(tok_id);
-        let dot: f64 = last
-            .iter()
-            .zip(lm_row.iter())
-            .map(|(&a, &b)| a as f64 * b as f64)
-            .sum();
-        let mut logit = (dot / logits_scale as f64) as f32;
-        if let Some(cap) = final_softcap {
-            logit = (logit / cap).tanh() * cap;
-        }
-        logits.push(logit);
-    }
+
+    // Single BLAS gemv: (1, hidden) @ (vocab, hidden)^T → (1, vocab)
+    // Replaces vocab_size individual dot products.
+    let last_2d = h_final.slice(ndarray::s![seq_len - 1..seq_len, ..]);
+    let logits_raw = dot_proj(&last_2d, &weights.lm_head);
+    let inv_scale = 1.0 / logits_scale;
+    let logits: Vec<f32> = logits_raw
+        .row(0)
+        .iter()
+        .map(|&v| {
+            let mut logit = v * inv_scale;
+            if let Some(cap) = final_softcap {
+                logit = (logit / cap).tanh() * cap;
+            }
+            logit
+        })
+        .collect();
 
     let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let exp_sum: f64 = logits
@@ -493,6 +504,38 @@ pub fn predict_with_ffn(
     }
 
     logits_to_predictions(weights, &h, tokenizer, top_k)
+}
+
+/// Forward pass with residual capture — returns predictions + per-layer residuals.
+/// Captures the residual at the last token position after attention (before FFN)
+/// at each layer. This is what gate_knn sees during inference.
+pub fn predict_with_ffn_trace(
+    weights: &ModelWeights,
+    tokenizer: &tokenizers::Tokenizer,
+    token_ids: &[u32],
+    top_k: usize,
+    ffn: &dyn FfnBackend,
+) -> PredictResultWithResiduals {
+    let num_layers = weights.num_layers;
+    let mut h = embed_tokens(weights, token_ids);
+    let mut residuals = Vec::with_capacity(num_layers);
+
+    for layer in 0..num_layers {
+        // Capture the residual at the last token position BEFORE this layer
+        let last_pos = h.shape()[0] - 1;
+        residuals.push(h.row(last_pos).to_vec());
+
+        h = match run_layer_with_ffn(weights, &h, layer, ffn, false) {
+            Some((h_new, _)) => h_new,
+            None => continue,
+        };
+    }
+
+    let result = logits_to_predictions(weights, &h, tokenizer, top_k);
+    PredictResultWithResiduals {
+        predictions: result.predictions,
+        residuals,
+    }
 }
 
 /// Run a full forward pass with per-layer FFN backend selection.

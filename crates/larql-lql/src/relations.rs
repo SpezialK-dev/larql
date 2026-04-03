@@ -22,15 +22,16 @@ pub struct RelationClassifier {
 
 impl RelationClassifier {
     /// Build a classifier from discovered clusters + probe labels in a vindex directory.
+    /// Returns Some even if only probe labels exist (no clusters needed).
     pub fn from_vindex(vindex_path: &std::path::Path) -> Option<Self> {
         let clusters_path = vindex_path.join("relation_clusters.json");
         let assignments_path = vindex_path.join("feature_clusters.jsonl");
         let probe_labels_path = vindex_path.join("feature_labels.json");
 
-        let clusters: ClusterResult = {
-            let text = std::fs::read_to_string(&clusters_path).ok()?;
-            serde_json::from_str(&text).ok()?
-        };
+        // Clusters are optional — probe labels work without them
+        let clusters: Option<ClusterResult> = std::fs::read_to_string(&clusters_path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok());
 
         let mut feature_assignments = std::collections::HashMap::new();
         if let Ok(text) = std::fs::read_to_string(&assignments_path) {
@@ -67,10 +68,15 @@ impl RelationClassifier {
             }
         }
 
+        // Return None only if we have nothing at all
+        if clusters.is_none() && feature_assignments.is_empty() && probe_labels.is_empty() {
+            return None;
+        }
+
         let probe_count = probe_labels.len();
 
         Some(Self {
-            clusters: Some(clusters),
+            clusters,
             feature_assignments,
             probe_labels,
             probe_count,

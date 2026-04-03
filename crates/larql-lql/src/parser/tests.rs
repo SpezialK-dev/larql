@@ -471,12 +471,12 @@ fn parse_select_order_default_asc() {
 fn parse_describe_minimal() {
     let stmt = parse(r#"DESCRIBE "France";"#).unwrap();
     match stmt {
-        Statement::Describe { entity, band, layer, relations_only, verbose } => {
+        Statement::Describe { entity, band, layer, relations_only, mode } => {
             assert_eq!(entity, "France");
             assert!(band.is_none());
             assert!(layer.is_none());
             assert!(!relations_only);
-            assert!(!verbose);
+            assert_eq!(mode, DescribeMode::Verbose); // verbose is now the default
         }
         _ => panic!("expected Describe"),
     }
@@ -577,7 +577,25 @@ fn parse_describe_band_with_relations_only() {
 fn parse_describe_verbose() {
     let stmt = parse(r#"DESCRIBE "France" VERBOSE;"#).unwrap();
     match stmt {
-        Statement::Describe { verbose, .. } => assert!(verbose),
+        Statement::Describe { mode, .. } => assert_eq!(mode, DescribeMode::Verbose),
+        _ => panic!("expected Describe"),
+    }
+}
+
+#[test]
+fn parse_describe_brief() {
+    let stmt = parse(r#"DESCRIBE "France" BRIEF;"#).unwrap();
+    match stmt {
+        Statement::Describe { mode, .. } => assert_eq!(mode, DescribeMode::Brief),
+        _ => panic!("expected Describe"),
+    }
+}
+
+#[test]
+fn parse_describe_raw() {
+    let stmt = parse(r#"DESCRIBE "France" RAW;"#).unwrap();
+    match stmt {
+        Statement::Describe { mode, .. } => assert_eq!(mode, DescribeMode::Raw),
         _ => panic!("expected Describe"),
     }
 }
@@ -586,9 +604,9 @@ fn parse_describe_verbose() {
 fn parse_describe_band_verbose() {
     let stmt = parse(r#"DESCRIBE "France" ALL LAYERS VERBOSE;"#).unwrap();
     match stmt {
-        Statement::Describe { band, verbose, .. } => {
+        Statement::Describe { band, mode, .. } => {
             assert_eq!(band, Some(LayerBand::All));
-            assert!(verbose);
+            assert_eq!(mode, DescribeMode::Verbose);
         }
         _ => panic!("expected Describe"),
     }
