@@ -10,8 +10,8 @@
 use ndarray::Array2;
 use std::time::Instant;
 
-use larql_inference::backend::cpu::CpuBackend;
-use larql_inference::backend::{default_backend, MatMulBackend, MatMulOp};
+use larql_compute::CpuBackend;
+use larql_compute::{default_backend, ComputeBackend, MatMulOp};
 
 /// Deterministic f32 matrix.
 fn synth_matrix(rows: usize, cols: usize, seed: u64) -> Array2<f32> {
@@ -45,7 +45,7 @@ fn bench<F: FnMut()>(name: &str, iters: usize, mut f: F) {
     }
 }
 
-fn bench_backend(label: &str, backend: &dyn MatMulBackend) {
+fn bench_backend(label: &str, backend: &dyn ComputeBackend) {
     println!("\n--- {label}: {} ---\n", backend.name());
 
     // ── Attention projections ──

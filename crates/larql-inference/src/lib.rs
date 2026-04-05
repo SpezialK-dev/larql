@@ -1,7 +1,6 @@
 extern crate blas_src;
 
 pub mod attention;
-pub mod backend;
 pub mod capture;
 pub mod error;
 pub mod ffn;
@@ -23,11 +22,11 @@ pub use ndarray;
 pub use safetensors;
 pub use tokenizers;
 
-// Backend re-exports.
-pub use backend::{MatMulBackend, MatMulOp, default_backend, cpu_backend, dot_proj_gpu, matmul_gpu};
-pub use backend::cpu::CpuBackend;
+// Backend re-exports (from larql-compute).
+pub use larql_compute::{ComputeBackend, MatMulOp, default_backend, cpu_backend, dot_proj_gpu, matmul_gpu};
+pub use larql_compute::CpuBackend;
 #[cfg(feature = "metal")]
-pub use backend::metal::MetalBackend;
+pub use larql_compute::MetalBackend;
 
 // Re-export essentials at crate root.
 pub use capture::{

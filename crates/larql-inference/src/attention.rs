@@ -146,16 +146,16 @@ pub fn run_attention_block(
 }
 
 /// GPU-accelerated attention block. Same as `run_attention_block` but routes
-/// Q/K/V/O projections through the MatMulBackend (Metal, CUDA, or CPU).
+/// Q/K/V/O projections through the ComputeBackend (Metal, CUDA, or CPU).
 /// If backend is None, falls back to CPU BLAS.
 pub fn run_attention_block_gpu(
     weights: &crate::model::ModelWeights,
     h: &Array2<f32>,
     layer: usize,
     capture_attention: bool,
-    backend: Option<&dyn crate::backend::MatMulBackend>,
+    backend: Option<&dyn larql_compute::ComputeBackend>,
 ) -> Option<(Array2<f32>, Array2<f32>, Option<AttentionWeights>)> {
-    use crate::backend::dot_proj_gpu;
+    use larql_compute::dot_proj_gpu;
     use crate::forward::add_bias;
     use crate::residual::rms_norm_heads;
 

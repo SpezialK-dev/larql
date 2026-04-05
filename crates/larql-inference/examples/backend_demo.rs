@@ -13,8 +13,8 @@
 use ndarray::Array2;
 use std::time::Instant;
 
-use larql_inference::backend::cpu::CpuBackend;
-use larql_inference::backend::{default_backend, MatMulBackend, MatMulOp};
+use larql_compute::CpuBackend;
+use larql_compute::{default_backend, ComputeBackend, MatMulOp};
 
 /// Deterministic f32 matrix.
 fn synth_matrix(rows: usize, cols: usize, seed: u64) -> Array2<f32> {
@@ -52,7 +52,7 @@ fn main() {
     {
         // The default_backend() already calibrated. Show the result.
         // We need to access the threshold — let's create a second backend to inspect.
-        if let Some(metal) = larql_inference::backend::metal::MetalBackend::new() {
+        if let Some(metal) = larql_compute::MetalBackend::new() {
             metal.calibrate();
             let threshold = metal.flop_threshold();
             println!("Calibrated FLOP threshold: {} ({:.1}M FLOPs)", threshold, threshold as f64 / 1e6);

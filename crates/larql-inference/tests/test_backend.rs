@@ -4,8 +4,8 @@
 //! attention projections, QK^T, FFN up/down, and final logits.
 
 use ndarray::Array2;
-use larql_inference::backend::cpu::CpuBackend;
-use larql_inference::backend::{MatMulBackend, MatMulOp, default_backend};
+use larql_compute::CpuBackend;
+use larql_compute::{ComputeBackend, MatMulOp, default_backend};
 
 /// Deterministic f32 data generator.
 fn synth_matrix(rows: usize, cols: usize, seed: u64) -> Array2<f32> {
@@ -221,7 +221,7 @@ mod factory {
 #[cfg(feature = "metal")]
 mod metal_tests {
     use super::*;
-    use larql_inference::backend::metal::MetalBackend;
+    use larql_compute::MetalBackend;
 
     #[test]
     fn metal_device_available() {

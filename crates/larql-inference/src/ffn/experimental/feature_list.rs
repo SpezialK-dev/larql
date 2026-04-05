@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use ndarray::Array2;
 
 use crate::ffn::{sigmoid, FfnBackend};

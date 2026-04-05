@@ -15,7 +15,7 @@
 use ndarray::Array2;
 
 use crate::attention::AttentionWeights;
-use crate::backend::MatMulBackend;
+use larql_compute::ComputeBackend;
 use crate::ffn::FfnBackend;
 use crate::model::ModelWeights;
 
@@ -50,7 +50,7 @@ pub trait LayerGraph {
 /// This is today's working path — nothing changes, just wrapped in the trait.
 pub struct DenseLayerGraph<'a> {
     pub ffn: &'a dyn FfnBackend,
-    pub backend: Option<&'a dyn MatMulBackend>,
+    pub backend: Option<&'a dyn ComputeBackend>,
     pub capture_activation: bool,
     pub capture_attention: bool,
 }
@@ -125,7 +125,7 @@ impl<'a> LayerGraph for PerLayerGraph<'a> {
 /// This is the working walk path, wrapped in the LayerGraph trait.
 pub struct WalkLayerGraph<'a> {
     pub ffn: &'a dyn FfnBackend,
-    pub backend: Option<&'a dyn MatMulBackend>,
+    pub backend: Option<&'a dyn ComputeBackend>,
 }
 
 impl<'a> LayerGraph for WalkLayerGraph<'a> {

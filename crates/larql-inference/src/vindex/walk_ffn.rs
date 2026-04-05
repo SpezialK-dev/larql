@@ -11,7 +11,7 @@
 
 use ndarray::Array2;
 
-use crate::backend::MatMulBackend;
+use larql_compute::ComputeBackend;
 use crate::ffn::FfnBackend;
 use crate::ffn::sparse_compute::{sparse_ffn_forward, sparse_ffn_forward_with_overrides};
 use crate::model::ModelWeights;
@@ -22,7 +22,7 @@ pub struct WalkFfn<'a> {
     pub weights: &'a ModelWeights,
     pub index: &'a dyn GateIndex,
     pub top_k: usize,
-    pub backend: Option<&'a dyn MatMulBackend>,
+    pub backend: Option<&'a dyn ComputeBackend>,
     trace_residuals: std::cell::RefCell<Vec<(usize, Vec<f32>)>>,
     record_trace: bool,
 }
@@ -40,7 +40,7 @@ impl<'a> WalkFfn<'a> {
         weights: &'a ModelWeights,
         index: &'a dyn GateIndex,
         top_k: usize,
-        backend: &'a dyn MatMulBackend,
+        backend: &'a dyn ComputeBackend,
     ) -> Self {
         Self {
             weights, index, top_k, backend: Some(backend),
@@ -297,10 +297,10 @@ impl<'a> WalkFfn<'a> {
         );
 
         // gate_scores = gate_vectors @ x^T (one BLAS gemv from contiguous region)
-        let gate_scores = crate::backend::dot_proj_gpu(x, &gate_view, self.backend);
+        let gate_scores = larql_compute::dot_proj_gpu(x, &gate_view, self.backend);
 
         // up_scores = x @ up_vectors^T (contiguous, right after gate in memory)
-        let up_scores = crate::backend::dot_proj_gpu(x, &up_view, self.backend);
+        let up_scores = larql_compute::dot_proj_gpu(x, &up_view, self.backend);
 
         // GEGLU
         let activation = if use_gelu {
@@ -310,7 +310,7 @@ impl<'a> WalkFfn<'a> {
         };
 
         // down: activation @ down_matrix (contiguous, right after up in memory)
-        let mut out = crate::backend::matmul_gpu(&activation, &down_view, self.backend);
+        let mut out = larql_compute::matmul_gpu(&activation, &down_view, self.backend);
 
         if let Some(bias) = arch.ffn_down_bias_key(layer)
             .and_then(|k| self.weights.vectors.get(&k))
@@ -347,7 +347,7 @@ impl<'a> WalkFfn<'a> {
         );
 
         // up_scores = x @ up_vectors^T = [seq, intermediate]
-        let up_scores = crate::backend::dot_proj_gpu(x, &up_view, self.backend);
+        let up_scores = larql_compute::dot_proj_gpu(x, &up_view, self.backend);
 
         // GEGLU: silu(gate) * up  (exact, same as dense)
         let activation = if use_gelu {
@@ -357,7 +357,7 @@ impl<'a> WalkFfn<'a> {
         };
 
         // Down: activation @ down_matrix (mmap)
-        let mut out = crate::backend::matmul_gpu(&activation, &down_view, self.backend);
+        let mut out = larql_compute::matmul_gpu(&activation, &down_view, self.backend);
 
         if let Some(bias) = arch.ffn_down_bias_key(layer)
             .and_then(|k| self.weights.vectors.get(&k))
