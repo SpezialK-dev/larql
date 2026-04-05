@@ -220,6 +220,98 @@ fn main() {
                 });
         }
 
+        // ── v5: 1 thread per row, 256 rows per TG ──
+        {
+            let pipeline = device.new_compute_pipeline_state_with_function(
+                &lib.get_function("q4_matvec_v5", None).unwrap()
+            ).unwrap();
+            let buf_q8 = bufs.transient_from_i8(&q8_x);
+            let buf_sc = bufs.transient_from_f32(&q8_scales);
+            let n_val = inter as u32;
+            let k_val = hidden as u32;
+            let num_tgs = ((inter + 255) / 256) as u64;
+
+            bench_metal("v5 (256-row, no simd)", &pipeline,
+                MTLSize::new(num_tgs, 1, 1), MTLSize::new(256, 1, 1),
+                &|enc, buf_out| {
+                    enc.set_buffer(1, Some(&buf_q8), 0);
+                    enc.set_buffer(2, Some(&buf_sc), 0);
+                    enc.set_buffer(3, Some(buf_out), 0);
+                    enc.set_bytes(4, 4, &n_val as *const u32 as *const c_void);
+                    enc.set_bytes(5, 4, &k_val as *const u32 as *const c_void);
+                });
+        }
+
+        // ── Sparse Q4 matvec (K selected rows) ──
+        println!("\n  --- Sparse Q4 matvec (walk architecture) ---");
+        {
+            let sparse_pipeline = device.new_compute_pipeline_state_with_function(
+                &lib.get_function("q4_sparse_matvec", None).unwrap()
+            ).unwrap();
+            let buf_q8_sp = bufs.transient_from_i8(&q8_x);
+            let buf_sc_sp = bufs.transient_from_f32(&q8_scales);
+            let k_hidden = hidden as u32;
+
+            for &k_rows in &[100u32, 400, 1000, 5000, 10240] {
+                let step = (inter as u32).max(1) / k_rows.max(1);
+                let indices: Vec<u32> = (0..k_rows).map(|i| i * step.max(1)).collect();
+
+                // Pack indices as bytes for Metal buffer
+                let idx_bytes: Vec<u8> = indices.iter()
+                    .flat_map(|i| i.to_le_bytes())
+                    .collect();
+                let buf_idx = bufs.transient_from_f32(unsafe {
+                    std::slice::from_raw_parts(idx_bytes.as_ptr() as *const f32, indices.len())
+                });
+                let buf_out_sp = bufs.output((k_rows as usize * 4) as u64);
+
+                // Warmup
+                let cmd = queue.new_command_buffer();
+                let enc = cmd.new_compute_command_encoder();
+                enc.set_compute_pipeline_state(&sparse_pipeline);
+                enc.set_buffer(0, Some(&buf_q4), 0);
+                enc.set_buffer(1, Some(&buf_q8_sp), 0);
+                enc.set_buffer(2, Some(&buf_sc_sp), 0);
+                enc.set_buffer(3, Some(&buf_idx), 0);
+                enc.set_buffer(4, Some(&buf_out_sp), 0);
+                enc.set_bytes(5, 4, &k_rows as *const u32 as *const c_void);
+                enc.set_bytes(6, 4, &k_hidden as *const u32 as *const c_void);
+                enc.dispatch_threads(
+                    MTLSize::new(k_rows as u64, 1, 1),
+                    MTLSize::new(256.min(k_rows as u64), 1, 1),
+                );
+                enc.end_encoding();
+                cmd.commit();
+                cmd.wait_until_completed();
+
+                // Benchmark
+                let t0 = Instant::now();
+                for _ in 0..n_iters {
+                    let cmd = queue.new_command_buffer();
+                    let enc = cmd.new_compute_command_encoder();
+                    enc.set_compute_pipeline_state(&sparse_pipeline);
+                    enc.set_buffer(0, Some(&buf_q4), 0);
+                    enc.set_buffer(1, Some(&buf_q8_sp), 0);
+                    enc.set_buffer(2, Some(&buf_sc_sp), 0);
+                    enc.set_buffer(3, Some(&buf_idx), 0);
+                    enc.set_buffer(4, Some(&buf_out_sp), 0);
+                    enc.set_bytes(5, 4, &k_rows as *const u32 as *const c_void);
+                    enc.set_bytes(6, 4, &k_hidden as *const u32 as *const c_void);
+                    enc.dispatch_threads(
+                        MTLSize::new(k_rows as u64, 1, 1),
+                        MTLSize::new(256.min(k_rows as u64), 1, 1),
+                    );
+                    enc.end_encoding();
+                    cmd.commit();
+                    cmd.wait_until_completed();
+                }
+                let ms = t0.elapsed().as_secs_f64() * 1000.0 / n_iters as f64;
+                let data_mb = k_rows as f64 * hidden as f64 / 32.0 * 18.0 / 1e6;
+                let pct = k_rows as f64 / inter as f64 * 100.0;
+                println!("  K={k_rows:>5} ({pct:>5.1}%): {ms:>6.3}ms  ({data_mb:.1}MB)");
+            }
+        }
+
         // ── Attention-sized Q4 matrices ──
         println!("\n  --- Attention projections (v4 on smaller matrices) ---");
         {

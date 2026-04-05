@@ -42,6 +42,8 @@ pub struct MetalBackend {
     causal_attn_pipeline: ComputePipelineState,
     geglu_pipeline: ComputePipelineState,
     q8_quant_pipeline: ComputePipelineState,
+    pub kv_attend_pipeline: ComputePipelineState,
+    pub kv_append_pipeline: ComputePipelineState,
     flop_threshold: AtomicUsize,
 }
 
@@ -86,9 +88,16 @@ impl MetalBackend {
         let geglu_pipeline = device.new_compute_pipeline_state_with_function(&geglu_fn).ok()?;
         let q8_quant_pipeline = device.new_compute_pipeline_state_with_function(&q8_quant_fn).ok()?;
 
+        // KV cache attention
+        let kv_attend_fn = library.get_function("kv_attention", None).ok()?;
+        let kv_append_fn = library.get_function("kv_cache_append", None).ok()?;
+        let kv_attend_pipeline = device.new_compute_pipeline_state_with_function(&kv_attend_fn).ok()?;
+        let kv_append_pipeline = device.new_compute_pipeline_state_with_function(&kv_append_fn).ok()?;
+
         Some(Self {
             queue, bufs, f32_ops, q4, causal_attn_pipeline,
             geglu_pipeline, q8_quant_pipeline,
+            kv_attend_pipeline, kv_append_pipeline,
             flop_threshold: AtomicUsize::new(calibrate::DEFAULT_FLOP_THRESHOLD),
         })
     }
@@ -102,6 +111,8 @@ impl MetalBackend {
     pub fn flop_threshold(&self) -> usize { self.flop_threshold.load(Ordering::Relaxed) }
     pub fn set_flop_threshold(&self, t: usize) { self.flop_threshold.store(t.max(calibrate::MIN_FLOP_FLOOR), Ordering::Relaxed); }
     pub fn cache_size(&self) -> usize { self.bufs.len() }
+    pub fn bufs(&self) -> &BufferCache { &self.bufs }
+    pub fn queue(&self) -> &CommandQueue { &self.queue }
 
     // ── Direct Q4 ops (for benchmarking outside the trait) ──
 

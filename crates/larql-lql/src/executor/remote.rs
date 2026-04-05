@@ -38,10 +38,18 @@ impl Session {
         let layers = stats["layers"].as_u64().unwrap_or(0);
         let features = stats["features"].as_u64().unwrap_or(0);
 
+        // Generate a unique session ID for this connection
+        let session_id = format!("larql-{}-{}", std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis());
+
         self.backend = Backend::Remote {
             url: url.clone(),
             client,
             local_patches: Vec::new(),
+            session_id,
         };
         self.patch_recording = None;
         self.auto_patch = false;
@@ -57,10 +65,10 @@ impl Session {
         matches!(&self.backend, Backend::Remote { .. })
     }
 
-    /// Get the remote URL and client, or error.
-    fn require_remote(&self) -> Result<(&str, &reqwest::blocking::Client), LqlError> {
+    /// Get the remote URL, client, and session ID, or error.
+    fn require_remote(&self) -> Result<(&str, &reqwest::blocking::Client, &str), LqlError> {
         match &self.backend {
-            Backend::Remote { url, client, .. } => Ok((url, client)),
+            Backend::Remote { url, client, session_id, .. } => Ok((url, client, session_id)),
             _ => Err(LqlError::Execution("not connected to a remote server".into())),
         }
     }
@@ -82,7 +90,7 @@ impl Session {
         band: Option<LayerBand>,
         mode: crate::ast::DescribeMode,
     ) -> Result<Vec<String>, LqlError> {
-        let (url, client) = self.require_remote()?;
+        let (url, client, _sid) = self.require_remote()?;
         let verbose = mode == crate::ast::DescribeMode::Verbose;
         let show_also = matches!(mode, crate::ast::DescribeMode::Verbose | crate::ast::DescribeMode::Raw);
 
@@ -204,7 +212,7 @@ impl Session {
         top: Option<u32>,
         layers: Option<&Range>,
     ) -> Result<Vec<String>, LqlError> {
-        let (url, client) = self.require_remote()?;
+        let (url, client, _sid) = self.require_remote()?;
 
         let top_k = top.unwrap_or(10);
         let mut params = vec![
@@ -256,7 +264,7 @@ impl Session {
         top: Option<u32>,
         compare: bool,
     ) -> Result<Vec<String>, LqlError> {
-        let (url, client) = self.require_remote()?;
+        let (url, client, sid) = self.require_remote()?;
 
         let mode = if compare { "compare" } else { "walk" };
         let body = serde_json::json!({
@@ -267,6 +275,7 @@ impl Session {
 
         let resp = client
             .post(format!("{url}/v1/infer"))
+            .header("x-session-id", sid)
             .json(&body)
             .send()
             .map_err(|e| LqlError::Execution(format!("request failed: {e}")))?;
@@ -322,7 +331,7 @@ impl Session {
         relations_only: bool,
         with_attention: bool,
     ) -> Result<Vec<String>, LqlError> {
-        let (url, client) = self.require_remote()?;
+        let (url, client, _sid) = self.require_remote()?;
 
         let per_layer = top.unwrap_or(3);
         let band_str = match band {
@@ -472,7 +481,7 @@ impl Session {
     }
 
     pub(crate) fn remote_stats(&self) -> Result<Vec<String>, LqlError> {
-        let (url, client) = self.require_remote()?;
+        let (url, client, _sid) = self.require_remote()?;
 
         let resp = client
             .get(format!("{url}/v1/stats"))
@@ -519,7 +528,7 @@ impl Session {
     }
 
     pub(crate) fn remote_show_relations(&self) -> Result<Vec<String>, LqlError> {
-        let (url, client) = self.require_remote()?;
+        let (url, client, _sid) = self.require_remote()?;
 
         let resp = client
             .get(format!("{url}/v1/relations"))
@@ -575,7 +584,7 @@ impl Session {
         layer: Option<u32>,
         confidence: Option<f32>,
     ) -> Result<Vec<String>, LqlError> {
-        let (url, client) = self.require_remote()?;
+        let (url, client, sid) = self.require_remote()?;
 
         let body = serde_json::json!({
             "entity": entity,
@@ -587,6 +596,7 @@ impl Session {
 
         let resp = client
             .post(format!("{url}/v1/insert"))
+            .header("x-session-id", sid)
             .json(&body)
             .send()
             .map_err(|e| LqlError::Execution(format!("request failed: {e}")))?;
@@ -618,7 +628,7 @@ impl Session {
         &self,
         conditions: &[crate::ast::Condition],
     ) -> Result<Vec<String>, LqlError> {
-        let (url, client) = self.require_remote()?;
+        let (url, client, _sid) = self.require_remote()?;
 
         // Build delete operations from conditions.
         let mut ops = Vec::new();
@@ -675,7 +685,7 @@ impl Session {
         set: &[crate::ast::Assignment],
         conditions: &[crate::ast::Condition],
     ) -> Result<Vec<String>, LqlError> {
-        let (url, client) = self.require_remote()?;
+        let (url, client, _sid) = self.require_remote()?;
 
         let layer = conditions
             .iter()
@@ -762,7 +772,7 @@ impl Session {
         conditions: &[crate::ast::Condition],
         limit: Option<u32>,
     ) -> Result<Vec<String>, LqlError> {
-        let (url, client) = self.require_remote()?;
+        let (url, client, _sid) = self.require_remote()?;
 
         let mut body = serde_json::Map::new();
         body.insert("limit".into(), serde_json::json!(limit.unwrap_or(20)));

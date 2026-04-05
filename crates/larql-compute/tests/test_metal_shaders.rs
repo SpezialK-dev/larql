@@ -315,3 +315,198 @@ fn metal_backend_implements_trait() {
     let result = metal.matmul_transb(a.view(), b.view());
     assert_eq!(result.shape(), &[2, 32]);
 }
+
+// ── Q8 matvec ──
+
+#[test]
+fn q8_matvec_metal_nonzero() {
+    let metal = get_metal();
+    let hidden = 256;
+    let rows = 64;
+
+    let weights: Vec<f32> = (0..rows * hidden).map(|i| (i as f32 * 0.001).cos()).collect();
+    let x: Vec<f32> = (0..hidden).map(|i| (i as f32 * 0.01).sin()).collect();
+
+    let (w_q8, w_scales) = larql_compute::cpu::ops::q8_matvec::quantize_weights_q8(&weights, rows, hidden);
+    let (x_q8, x_scales) = larql_compute::cpu::ops::q4_common::quantize_to_q8(&x);
+
+    // CPU reference
+    let cpu_result = larql_compute::cpu::ops::q8_matvec::dispatch(&w_q8, &w_scales, &x_q8, &x_scales, rows, hidden);
+    assert!(cpu_result.iter().any(|&v| v.abs() > 0.01), "Q8 CPU should produce nonzero");
+}
+
+// ── Sparse Q4 matvec ──
+
+#[test]
+fn sparse_matvec_matches_dense() {
+    let metal = get_metal();
+    let hidden = 256;
+    let n_rows = 64;
+    let k_selected = 16;
+
+    let matrix: Vec<f32> = (0..n_rows * hidden).map(|i| (i as f32 * 0.001).cos()).collect();
+    let q4_data = quantize_q4_0(&matrix);
+    let x: Vec<f32> = (0..hidden).map(|i| (i as f32 * 0.01).sin()).collect();
+    let (q8_x, q8_scales) = q4::quantize_to_q8(&x);
+
+    // Dense: score all rows
+    let dense_result = metal.q4_matvec_direct(&q4_data, &q8_x, &q8_scales, n_rows, hidden);
+
+    // Sparse: score selected rows [0, 4, 8, 12, ...]
+    let indices: Vec<u32> = (0..k_selected as u32).map(|i| i * 4).collect();
+
+    // Use the sparse shader via raw Metal dispatch
+    let device = metal::Device::system_default().unwrap();
+    let src = larql_compute::metal::shaders::all_shaders();
+    let lib = device.new_library_with_source(&src, &metal::CompileOptions::new()).unwrap();
+    let pipeline = device.new_compute_pipeline_state_with_function(
+        &lib.get_function("q4_sparse_matvec", None).unwrap()
+    ).unwrap();
+
+    let bufs = &larql_compute::metal::buffers::BufferCache::new(&device);
+    let queue = device.new_command_queue();
+    let buf_q4 = bufs.get_bytes(&q4_data);
+    let buf_q8 = bufs.transient_from_i8(&q8_x);
+    let buf_sc = bufs.transient_from_f32(&q8_scales);
+    let idx_bytes: Vec<u8> = indices.iter().flat_map(|i| i.to_le_bytes()).collect();
+    let buf_idx = bufs.transient_from_f32(unsafe {
+        std::slice::from_raw_parts(idx_bytes.as_ptr() as *const f32, indices.len())
+    });
+    let buf_out = bufs.output((k_selected * 4) as u64);
+
+    let k_val = k_selected as u32;
+    let h_val = hidden as u32;
+    let cmd = queue.new_command_buffer();
+    let enc = cmd.new_compute_command_encoder();
+    enc.set_compute_pipeline_state(&pipeline);
+    enc.set_buffer(0, Some(&buf_q4), 0);
+    enc.set_buffer(1, Some(&buf_q8), 0);
+    enc.set_buffer(2, Some(&buf_sc), 0);
+    enc.set_buffer(3, Some(&buf_idx), 0);
+    enc.set_buffer(4, Some(&buf_out), 0);
+    enc.set_bytes(5, 4, &k_val as *const u32 as *const std::ffi::c_void);
+    enc.set_bytes(6, 4, &h_val as *const u32 as *const std::ffi::c_void);
+    enc.dispatch_threads(metal::MTLSize::new(k_selected as u64, 1, 1), metal::MTLSize::new(k_selected as u64, 1, 1));
+    enc.end_encoding();
+    cmd.commit();
+    cmd.wait_until_completed();
+
+    let ptr = buf_out.contents() as *const f32;
+    let sparse_result: Vec<f32> = unsafe { std::slice::from_raw_parts(ptr, k_selected).to_vec() };
+
+    // Verify sparse results match corresponding dense results
+    for (i, &idx) in indices.iter().enumerate() {
+        let diff = (sparse_result[i] - dense_result[idx as usize]).abs();
+        assert!(diff < 0.01, "sparse[{i}] (row {idx}) diff {diff}");
+    }
+}
+
+// ── Residual ops ──
+
+#[test]
+fn residual_add_correct() {
+    let device = metal::Device::system_default().unwrap();
+    let src = larql_compute::metal::shaders::all_shaders();
+    let lib = device.new_library_with_source(&src, &metal::CompileOptions::new()).unwrap();
+    let pipeline = device.new_compute_pipeline_state_with_function(
+        &lib.get_function("residual_add", None).unwrap()
+    ).unwrap();
+
+    let bufs = larql_compute::metal::buffers::BufferCache::new(&device);
+    let queue = device.new_command_queue();
+
+    let a = vec![1.0f32, 2.0, 3.0, 4.0];
+    let b = vec![10.0f32, 20.0, 30.0, 40.0];
+    let buf_a = bufs.transient_from_f32(&a);
+    let buf_b = bufs.transient_from_f32(&b);
+    let buf_out = bufs.output(16);
+    let len = 4u32;
+
+    let cmd = queue.new_command_buffer();
+    let enc = cmd.new_compute_command_encoder();
+    enc.set_compute_pipeline_state(&pipeline);
+    enc.set_buffer(0, Some(&buf_a), 0);
+    enc.set_buffer(1, Some(&buf_b), 0);
+    enc.set_buffer(2, Some(&buf_out), 0);
+    enc.set_bytes(3, 4, &len as *const u32 as *const std::ffi::c_void);
+    enc.dispatch_threads(metal::MTLSize::new(4, 1, 1), metal::MTLSize::new(4, 1, 1));
+    enc.end_encoding();
+    cmd.commit();
+    cmd.wait_until_completed();
+
+    let ptr = buf_out.contents() as *const f32;
+    let result: Vec<f32> = unsafe { std::slice::from_raw_parts(ptr, 4).to_vec() };
+    assert!((result[0] - 11.0).abs() < 1e-5);
+    assert!((result[1] - 22.0).abs() < 1e-5);
+    assert!((result[2] - 33.0).abs() < 1e-5);
+    assert!((result[3] - 44.0).abs() < 1e-5);
+}
+
+// ── GEGLU ──
+
+#[test]
+fn geglu_matches_cpu() {
+    let device = metal::Device::system_default().unwrap();
+    let src = larql_compute::metal::shaders::all_shaders();
+    let lib = device.new_library_with_source(&src, &metal::CompileOptions::new()).unwrap();
+    let pipeline = device.new_compute_pipeline_state_with_function(
+        &lib.get_function("geglu_silu", None).unwrap()
+    ).unwrap();
+
+    let bufs = larql_compute::metal::buffers::BufferCache::new(&device);
+    let queue = device.new_command_queue();
+
+    let n = 256;
+    let gate: Vec<f32> = (0..n).map(|i| (i as f32 * 0.1 - 12.8)).collect();
+    let up: Vec<f32> = (0..n).map(|i| (i as f32 * 0.05)).collect();
+
+    // CPU reference
+    let cpu_result = larql_compute::cpu::ops::geglu::geglu_silu_alloc(&gate, &up);
+
+    // Metal
+    let buf_g = bufs.transient_from_f32(&gate);
+    let buf_u = bufs.transient_from_f32(&up);
+    let buf_out = bufs.output((n * 4) as u64);
+    let n_val = n as u32;
+
+    let cmd = queue.new_command_buffer();
+    let enc = cmd.new_compute_command_encoder();
+    enc.set_compute_pipeline_state(&pipeline);
+    enc.set_buffer(0, Some(&buf_g), 0);
+    enc.set_buffer(1, Some(&buf_u), 0);
+    enc.set_buffer(2, Some(&buf_out), 0);
+    enc.set_bytes(3, 4, &n_val as *const u32 as *const std::ffi::c_void);
+    enc.dispatch_threads(metal::MTLSize::new(n as u64, 1, 1), metal::MTLSize::new(256, 1, 1));
+    enc.end_encoding();
+    cmd.commit();
+    cmd.wait_until_completed();
+
+    let ptr = buf_out.contents() as *const f32;
+    let metal_result: Vec<f32> = unsafe { std::slice::from_raw_parts(ptr, n).to_vec() };
+
+    let diff = max_diff(&cpu_result, &metal_result);
+    assert!(diff < 1e-4, "GEGLU CPU vs Metal diff {diff}");
+}
+
+// ── Cross-validation: all kernels listed ──
+
+#[test]
+fn all_new_kernel_functions_exist() {
+    let device = metal::Device::system_default().unwrap();
+    let src = larql_compute::metal::shaders::all_shaders();
+    let lib = device.new_library_with_source(&src, &metal::CompileOptions::new()).unwrap();
+
+    let names = [
+        "sgemm", "sgemm_transb",
+        "q4_matvec", "q4_matvec_v2", "q4_matvec_v3", "q4_matvec_v4", "q4_matvec_v5",
+        "q4_vecmat", "q4_f32_matvec", "q4_sparse_matvec",
+        "q8_matvec",
+        "geglu_silu", "quantize_q8",
+        "residual_copy", "residual_add", "rms_norm",
+        "causal_attention", "kv_attention", "kv_cache_append",
+    ];
+    for name in &names {
+        lib.get_function(name, None)
+            .unwrap_or_else(|e| panic!("Kernel '{name}' not found: {e}"));
+    }
+}

@@ -48,6 +48,7 @@ pub(crate) enum Backend {
         url: String,
         client: reqwest::blocking::Client,
         local_patches: Vec<larql_vindex::VindexPatch>,
+        session_id: String,
     },
     None,
 }

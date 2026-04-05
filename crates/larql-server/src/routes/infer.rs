@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use serde::Deserialize;
 
 use crate::error::ServerError;
@@ -21,9 +22,19 @@ pub struct InferRequest {
 fn default_top() -> usize { 5 }
 fn default_mode() -> String { "walk".into() }
 
+/// Extract session ID from headers.
+fn session_id(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+}
+
 fn run_infer(
+    state: &AppState,
     model: &LoadedModel,
     req: &InferRequest,
+    session_id: Option<&str>,
 ) -> Result<serde_json::Value, ServerError> {
     if model.infer_disabled {
         return Err(ServerError::InferenceUnavailable(
@@ -63,9 +74,9 @@ fn run_infer(
     let mut result = serde_json::Map::new();
     result.insert("prompt".into(), serde_json::json!(req.prompt));
 
-    if use_walk {
-        let patched = model.patched.blocking_read();
-        let walk_ffn = larql_inference::WalkFfn::new(weights, &*patched, 8092);
+    // Helper: run walk inference against a PatchedVindex
+    let run_walk = |patched: &larql_vindex::PatchedVindex| {
+        let walk_ffn = larql_inference::WalkFfn::new(weights, patched, 8092);
         let walk_start = std::time::Instant::now();
         let pred = larql_inference::predict_with_ffn(
             weights,
@@ -75,6 +86,24 @@ fn run_infer(
             &walk_ffn,
         );
         let walk_ms = walk_start.elapsed().as_secs_f64() * 1000.0;
+        (pred, walk_ms)
+    };
+
+    if use_walk {
+        let (pred, walk_ms) = if let Some(sid) = session_id {
+            // Session-scoped: use session's PatchedVindex
+            let sessions = state.sessions.sessions_blocking_write();
+            if let Some(session) = sessions.get(sid) {
+                run_walk(&session.patched)
+            } else {
+                drop(sessions);
+                let patched = model.patched.blocking_read();
+                run_walk(&*patched)
+            }
+        } else {
+            let patched = model.patched.blocking_read();
+            run_walk(&*patched)
+        };
 
         let predictions: Vec<serde_json::Value> = pred
             .predictions
@@ -134,6 +163,7 @@ fn run_infer(
 
 pub async fn handle_infer(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<InferRequest>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     state.bump_requests();
@@ -141,7 +171,9 @@ pub async fn handle_infer(
         .model(None)
         .ok_or_else(|| ServerError::NotFound("no model loaded".into()))?;
     let model = Arc::clone(model);
-    let result = tokio::task::spawn_blocking(move || run_infer(&model, &req))
+    let sid = session_id(&headers);
+    let state2 = Arc::clone(&state);
+    let result = tokio::task::spawn_blocking(move || run_infer(&state2, &model, &req, sid.as_deref()))
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))??;
     Ok(Json(result))
@@ -150,6 +182,7 @@ pub async fn handle_infer(
 pub async fn handle_infer_multi(
     State(state): State<Arc<AppState>>,
     Path(model_id): Path<String>,
+    headers: HeaderMap,
     Json(req): Json<InferRequest>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
     state.bump_requests();
@@ -157,7 +190,9 @@ pub async fn handle_infer_multi(
         .model(Some(&model_id))
         .ok_or_else(|| ServerError::NotFound(format!("model '{}' not found", model_id)))?;
     let model = Arc::clone(model);
-    let result = tokio::task::spawn_blocking(move || run_infer(&model, &req))
+    let sid = session_id(&headers);
+    let state2 = Arc::clone(&state);
+    let result = tokio::task::spawn_blocking(move || run_infer(&state2, &model, &req, sid.as_deref()))
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))??;
     Ok(Json(result))

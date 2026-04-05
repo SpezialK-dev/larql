@@ -16,9 +16,22 @@ use tokio::sync::RwLock;
 use crate::state::LoadedModel;
 
 /// Per-session state — an isolated PatchedVindex overlay.
-struct SessionState {
-    patched: PatchedVindex,
+pub struct SessionState {
+    pub patched: PatchedVindex,
     last_accessed: Instant,
+}
+
+impl SessionState {
+    pub fn new(base: larql_vindex::VectorIndex, now: Instant) -> Self {
+        Self {
+            patched: PatchedVindex::new(base),
+            last_accessed: now,
+        }
+    }
+
+    pub fn touch(&mut self, now: Instant) {
+        self.last_accessed = now;
+    }
 }
 
 /// Manages per-session PatchedVindex instances.
@@ -148,6 +161,58 @@ impl SessionManager {
 
         session.patched.remove_patch(idx);
         Ok(session.patched.num_patches())
+    }
+
+    /// Run a closure with read access to a session's PatchedVindex.
+    /// Falls back to the global patched if no session exists.
+    pub async fn with_patched<F, R>(
+        &self,
+        session_id: &str,
+        model: &Arc<LoadedModel>,
+        f: F,
+    ) -> R
+    where
+        F: FnOnce(&PatchedVindex) -> R,
+    {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(session_id) {
+            f(&session.patched)
+        } else {
+            let global = model.patched.blocking_read();
+            f(&*global)
+        }
+    }
+
+    /// Run a closure with mutable access to a session's PatchedVindex.
+    /// Creates the session if it doesn't exist.
+    pub async fn with_patched_mut<F, R>(
+        &self,
+        session_id: &str,
+        model: &Arc<LoadedModel>,
+        f: F,
+    ) -> R
+    where
+        F: FnOnce(&mut PatchedVindex) -> R,
+    {
+        let mut sessions = self.sessions.write().await;
+        let now = Instant::now();
+
+        let session = sessions
+            .entry(session_id.to_string())
+            .or_insert_with(|| {
+                let base = model.patched.blocking_read();
+                SessionState {
+                    patched: PatchedVindex::new(base.base().clone()),
+                    last_accessed: now,
+                }
+            });
+        session.last_accessed = now;
+        f(&mut session.patched)
+    }
+
+    /// Blocking write access to sessions map (for use in spawn_blocking).
+    pub fn sessions_blocking_write(&self) -> tokio::sync::RwLockWriteGuard<'_, HashMap<String, SessionState>> {
+        self.sessions.blocking_write()
     }
 
     /// Number of active sessions.
